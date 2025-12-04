@@ -1,6 +1,8 @@
 """
 SongGeneration Studio - Backend API
 AI Song Generation with Full Style Control
+
+PATCHED: Fixed style not being applied - auto_prompt_audio_type was overriding descriptions
 """
 
 import os
@@ -275,8 +277,13 @@ def build_lyrics_string(sections: List[Section]) -> str:
             parts.append(tag)
     return " ; ".join(parts)
 
-def build_description(request: SongRequest) -> str:
-    """Build the description string for style control."""
+def build_description(request: SongRequest, exclude_genre: bool = False) -> str:
+    """Build the description string for style control.
+    
+    Args:
+        request: The song request
+        exclude_genre: If True, excludes genre from description (use when auto_prompt handles genre)
+    """
     parts = []
 
     if request.gender and request.gender != "auto":
@@ -285,7 +292,8 @@ def build_description(request: SongRequest) -> str:
     if request.timbre:
         parts.append(request.timbre)
 
-    if request.genre and request.genre != "Auto":
+    # Only include genre in description if not handled by auto_prompt
+    if not exclude_genre and request.genre and request.genre != "Auto":
         parts.append(request.genre)
 
     if request.emotion:
@@ -302,6 +310,28 @@ def build_description(request: SongRequest) -> str:
         parts.append(f"the bpm is {request.bpm}")
 
     return ", ".join(parts) + "." if parts else ""
+
+
+# Genre to auto_prompt_audio_type mapping
+GENRE_TO_AUTO_PROMPT = {
+    "pop": "Pop", 
+    "r&b": "R&B", 
+    "rnb": "R&B",
+    "dance": "Dance", 
+    "electronic": "Dance", 
+    "edm": "Dance",
+    "jazz": "Jazz", 
+    "folk": "Folk", 
+    "acoustic": "Folk",
+    "rock": "Rock", 
+    "metal": "Metal", 
+    "heavy metal": "Metal",
+    "reggae": "Reggae", 
+    "chinese": "Chinese Style",
+    "chinese style": "Chinese Style",
+    "chinese tradition": "Chinese Tradition",
+    "chinese opera": "Chinese Opera",
+}
 
 async def run_generation(gen_id: str, request: SongRequest, reference_path: Optional[str]):
     """Run the actual SongGeneration inference."""
@@ -337,28 +367,62 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
 
         description = ""
 
+        # =======================================================================
+        # FIX: Style control logic
+        # The model documentation states: "Avoid providing both prompt_audio_path 
+        # and descriptions at the same time."
+        # 
+        # The same applies to auto_prompt_audio_type - it loads pre-trained style
+        # embeddings that can OVERRIDE text descriptions!
+        #
+        # Solution: Only use auto_prompt_audio_type when there are NO descriptions.
+        # When descriptions are provided, let them control the style entirely.
+        # =======================================================================
+        
         if reference_path:
+            # User provided reference audio - use it exclusively
             input_data["prompt_audio_path"] = reference_path
-            print(f"[GEN {gen_id}] Using reference audio (no descriptions to avoid conflicts)")
+            print(f"[GEN {gen_id}] Using reference audio for style (no text descriptions to avoid conflicts)")
         else:
-            description = build_description(request)
+            # =======================================================================
+            # STYLE CONTROL STRATEGY:
+            # 
+            # The model works best with BOTH:
+            # 1. auto_prompt_audio_type - loads pre-trained audio embeddings for the genre
+            # 2. descriptions - text conditioning for gender, timbre, instruments, BPM
+            #
+            # Looking at official demo, they use genre -> auto_prompt but empty description.
+            # However, we want to also control gender/timbre/etc, so we use descriptions
+            # BUT exclude the genre from descriptions to avoid conflict.
+            # =======================================================================
+            
+            # Determine auto_prompt_audio_type from genre
+            auto_type = "Auto"  # Default
+            genre_for_auto_prompt = None
+            
+            if request.genre:
+                # Extract first genre from comma-separated list
+                first_genre = request.genre.split(',')[0].strip().lower()
+                if first_genre in GENRE_TO_AUTO_PROMPT:
+                    auto_type = GENRE_TO_AUTO_PROMPT[first_genre]
+                    genre_for_auto_prompt = first_genre
+            
+            # Always set auto_prompt_audio_type - this provides the core musical style
+            input_data["auto_prompt_audio_type"] = auto_type
+            print(f"[GEN {gen_id}] Using auto_prompt_audio_type: {auto_type}")
+            
+            # Build descriptions for OTHER attributes (gender, timbre, emotion, instruments, BPM)
+            # Exclude genre if it's being handled by auto_prompt to avoid conflict
+            exclude_genre = genre_for_auto_prompt is not None
+            description = build_description(request, exclude_genre=exclude_genre)
+            
             if description:
                 input_data["descriptions"] = description
-
-            genre_map = {
-                "pop": "Pop", "r&b": "R&B", "rnb": "R&B",
-                "dance": "Dance", "electronic": "Dance", "edm": "Dance",
-                "jazz": "Jazz", "folk": "Folk", "acoustic": "Folk",
-                "rock": "Rock", "metal": "Metal", "heavy metal": "Metal",
-                "reggae": "Reggae", "chinese": "Chinese Style",
-            }
-
-            genre_lower = request.genre.lower() if request.genre else ""
-            auto_type = genre_map.get(genre_lower, "Auto")
-            input_data["auto_prompt_audio_type"] = auto_type
+                print(f"[GEN {gen_id}] Additional descriptions: {description}")
+            else:
+                print(f"[GEN {gen_id}] No additional descriptions (using auto_prompt style only)")
 
         print(f"[GEN {gen_id}] Lyrics: {lyrics[:200]}...")
-        print(f"[GEN {gen_id}] Description: {description if description else '(using reference audio)'}")
         print(f"[GEN {gen_id}] Input data: {json.dumps(input_data, indent=2)}")
 
         with open(input_file, 'w', encoding='utf-8') as f:
