@@ -301,7 +301,7 @@ const DarkAudioPlayer = ({ src }) => {
 };
 
 // Audio Trimmer Component with Waveform Visualization
-const AudioTrimmer = ({ onAccept, onClear }) => {
+const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
     const [file, setFile] = useState(null);
     const [clipDuration, setClipDuration] = useState(10);
     const [regionStart, setRegionStart] = useState(0);
@@ -442,6 +442,7 @@ const AudioTrimmer = ({ onAccept, onClear }) => {
         setFile(selectedFile);
         setIsAccepted(false);
         setRegionStart(0);
+        if (onFileLoad) onFileLoad(true);  // Notify parent that a file is loaded
     };
 
     // Stop playback helper
@@ -625,6 +626,7 @@ const AudioTrimmer = ({ onAccept, onClear }) => {
         setTotalDuration(0);
         setError(null);
         audioBufferRef.current = null;
+        if (onFileLoad) onFileLoad(false);  // Notify parent that file is cleared
         onClear();
     };
 
@@ -1614,6 +1616,7 @@ const App = () => {
     const [refFile, setRefFile] = useState(null);
     const [refId, setRefId] = useState(null);
     const [useReference, setUseReference] = useState(false);
+    const [refFileLoaded, setRefFileLoaded] = useState(false);  // Track if a reference file is loaded (even before accept)
     const [genStartTime, setGenStartTime] = useState(null);
     const [estimatedTime, setEstimatedTime] = useState(null);
     const [elapsedTime, setElapsedTime] = useState(0);
@@ -2013,28 +2016,92 @@ const App = () => {
                                     {gpuInfo.gpu.name} • {gpuInfo.gpu.free_gb}GB free / {gpuInfo.gpu.total_gb}GB total
                                 </div>
                             )}
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                                {['auto', 'low', 'high'].map(mode => {
-                                    const needsHighVram = mode === 'high';
-                                    const hasEnoughVram = gpuInfo?.gpu?.total_gb >= 12;
-                                    const isDisabled = needsHighVram && !hasEnoughVram;
+                            {(() => {
+                                // Wait for GPU info to load before showing anything
+                                if (!gpuInfo || !gpuInfo.gpu) {
                                     return (
-                                        <button
-                                            key={mode}
-                                            onClick={() => !isDisabled && setMemoryMode(mode)}
-                                            disabled={isDisabled}
-                                            title={isDisabled ? 'Requires 12GB+ VRAM' : ''}
-                                            style={{
-                                                ...btnStyle(memoryMode === mode),
-                                                opacity: isDisabled ? 0.4 : 1,
-                                                cursor: isDisabled ? 'not-allowed' : 'pointer',
-                                            }}
-                                        >
-                                            {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                                        </button>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            {['auto', 'low', 'high'].map(mode => (
+                                                <button key={mode} style={{ ...btnStyle(mode === 'auto'), opacity: 0.5 }} disabled>
+                                                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                                                </button>
+                                            ))}
+                                        </div>
                                     );
-                                })}
-                            </div>
+                                }
+
+                                const freeVram = gpuInfo.gpu.free_gb || 0;
+                                const hasRef = refFileLoaded || !!refId;  // Check if file is loaded OR already accepted
+
+                                // VRAM requirements per model: { low: X, high: Y, highWithRef: Z }
+                                const modelVramReqs = {
+                                    'songgeneration_base': { low: 10, high: 10, highWithRef: 16 },
+                                    'songgeneration_base_new': { low: 10, high: 10, highWithRef: 16 },
+                                    'songgeneration_base_full': { low: 10, high: 12, highWithRef: 18 },
+                                    'songgeneration_large': { low: 10, high: 22, highWithRef: 28 },
+                                };
+
+                                const reqs = modelVramReqs[selectedModel] || modelVramReqs['songgeneration_base'];
+                                const highVramNeeded = hasRef ? reqs.highWithRef : reqs.high;
+                                const canRunLow = freeVram >= reqs.low;
+                                const canRunHigh = freeVram >= highVramNeeded;
+
+                                // Can't run at all - not enough VRAM
+                                if (!canRunLow) {
+                                    return (
+                                        <div style={{
+                                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                                            borderRadius: '8px',
+                                            padding: '12px',
+                                            textAlign: 'center',
+                                        }}>
+                                            <div style={{ color: '#EF4444', fontSize: '13px', fontWeight: '500', marginBottom: '4px' }}>
+                                                Insufficient VRAM
+                                            </div>
+                                            <div style={{ color: '#888', fontSize: '11px' }}>
+                                                This model requires at least {reqs.low}GB VRAM ({freeVram.toFixed(1)}GB available)
+                                            </div>
+                                        </div>
+                                    );
+                                }
+
+                                return (
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        {['auto', 'low', 'high'].map(mode => {
+                                            const isHighMode = mode === 'high';
+                                            const isDisabled = isHighMode && !canRunHigh;
+
+                                            let tooltip = '';
+                                            if (mode === 'auto') {
+                                                tooltip = `Auto-selects based on available VRAM`;
+                                            } else if (mode === 'low') {
+                                                tooltip = `Optimized for lower VRAM (${reqs.low}GB min)`;
+                                            } else if (isDisabled) {
+                                                tooltip = `Requires ${highVramNeeded}GB VRAM (${freeVram.toFixed(1)}GB available)`;
+                                            } else {
+                                                tooltip = `Full quality mode (${highVramNeeded}GB${hasRef ? ' with reference' : ''})`;
+                                            }
+
+                                            return (
+                                                <button
+                                                    key={mode}
+                                                    onClick={() => !isDisabled && setMemoryMode(mode)}
+                                                    disabled={isDisabled}
+                                                    title={tooltip}
+                                                    style={{
+                                                        ...btnStyle(memoryMode === mode),
+                                                        opacity: isDisabled ? 0.4 : 1,
+                                                        cursor: isDisabled ? 'not-allowed' : 'pointer',
+                                                    }}
+                                                >
+                                                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                );
+                            })()}
                         </Card>
 
                         {/* Song Settings */}
@@ -2112,7 +2179,9 @@ const App = () => {
                                     setRefId(null);
                                     setRefFile(null);
                                     setUseReference(false);
+                                    setRefFileLoaded(false);
                                 }}
+                                onFileLoad={(loaded) => setRefFileLoaded(loaded)}
                             />
                         </Card>
 
