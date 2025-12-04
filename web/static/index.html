@@ -122,6 +122,17 @@
         .waveform-container canvas {
             border-radius: 4px;
         }
+
+        /* Custom select dropdown - remove default arrow */
+        .custom-select {
+            -webkit-appearance: none !important;
+            -moz-appearance: none !important;
+            appearance: none !important;
+            background-image: none !important;
+        }
+        .custom-select::-ms-expand {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
@@ -298,6 +309,8 @@ const AudioTrimmer = ({ onAccept, onClear }) => {
     const [isPlaying, setIsPlaying] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isAccepted, setIsAccepted] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [waveformPeaks, setWaveformPeaks] = useState([]);
     const [error, setError] = useState(null);
 
     const waveformRef = useRef(null);
@@ -367,6 +380,25 @@ const AudioTrimmer = ({ onAccept, onClear }) => {
                 const decodedBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
                 audioBufferRef.current = decodedBuffer;
                 console.log(`Audio decoded: ${decodedBuffer.sampleRate}Hz, ${decodedBuffer.numberOfChannels}ch, ${decodedBuffer.length} samples`);
+
+                // Extract waveform peaks for visualization (200 bars)
+                const numBars = 200;
+                const channelData = decodedBuffer.getChannelData(0); // Use first channel
+                const samplesPerBar = Math.floor(channelData.length / numBars);
+                const peaks = [];
+                for (let i = 0; i < numBars; i++) {
+                    let max = 0;
+                    const start = i * samplesPerBar;
+                    for (let j = 0; j < samplesPerBar; j++) {
+                        const val = Math.abs(channelData[start + j] || 0);
+                        if (val > max) max = val;
+                    }
+                    peaks.push(max);
+                }
+                // Normalize peaks to 0-100
+                const maxPeak = Math.max(...peaks, 0.01);
+                const normalizedPeaks = peaks.map(p => (p / maxPeak) * 100);
+                setWaveformPeaks(normalizedPeaks);
             } catch (err) {
                 console.error('Failed to decode audio:', err);
                 // Fallback to WaveSurfer's decoded data
@@ -742,57 +774,316 @@ const AudioTrimmer = ({ onAccept, onClear }) => {
             </div>
 
             {/* Waveform container - click to move selection */}
-            <div
-                className="waveform-container"
-                style={{ position: 'relative', overflow: 'hidden', cursor: totalDuration > 0 ? 'pointer' : 'default' }}
-                onClick={(e) => {
-                    if (totalDuration <= 0 || isLoading) return;
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const clickX = e.clientX - rect.left - 12; // Account for padding
-                    const containerWidth = rect.width - 24; // Account for padding
-                    const clickPercent = Math.max(0, Math.min(1, clickX / containerWidth));
-                    const clickTime = clickPercent * totalDuration;
-                    // Center the selection on click point
-                    const newStart = Math.max(0, Math.min(totalDuration - clipDuration, clickTime - clipDuration / 2));
-                    setRegionStart(newStart);
-                }}
-            >
-                {isLoading && (
-                    <div style={{
-                        position: 'absolute',
-                        top: 0, left: 0, right: 0, bottom: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: 'rgba(26, 26, 26, 0.8)',
-                        borderRadius: '8px',
-                        zIndex: 10,
-                    }}>
-                        <span style={{ color: '#10B981', fontSize: '13px' }}>Loading...</span>
-                    </div>
+            <div style={{ position: 'relative' }}>
+                {/* Expand button */}
+                {totalDuration > 0 && !isLoading && (
+                    <button
+                        onClick={() => setIsExpanded(true)}
+                        style={{
+                            position: 'absolute',
+                            top: '8px',
+                            right: '8px',
+                            zIndex: 5,
+                            background: 'rgba(0,0,0,0.5)',
+                            border: '1px solid #3a3a3a',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            color: '#888',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            transition: 'all 0.2s',
+                        }}
+                        onMouseOver={e => { e.currentTarget.style.color = '#10B981'; e.currentTarget.style.borderColor = '#10B981'; }}
+                        onMouseOut={e => { e.currentTarget.style.color = '#888'; e.currentTarget.style.borderColor = '#3a3a3a'; }}
+                    >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                        </svg>
+                        Expand
+                    </button>
                 )}
 
-                {/* Waveform wrapper with selection overlay */}
-                <div style={{ position: 'relative' }}>
-                    <div ref={waveformRef} />
-
-                    {/* Region overlay visualization - positioned over the waveform */}
-                    {totalDuration > 0 && !isLoading && (
+                <div
+                    className="waveform-container"
+                    style={{ position: 'relative', overflow: 'hidden', cursor: totalDuration > 0 ? 'pointer' : 'default' }}
+                    onClick={(e) => {
+                        if (totalDuration <= 0 || isLoading) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const clickX = e.clientX - rect.left - 12; // Account for padding
+                        const containerWidth = rect.width - 24; // Account for padding
+                        const clickPercent = Math.max(0, Math.min(1, clickX / containerWidth));
+                        const clickTime = clickPercent * totalDuration;
+                        // Center the selection on click point
+                        const newStart = Math.max(0, Math.min(totalDuration - clipDuration, clickTime - clipDuration / 2));
+                        setRegionStart(newStart);
+                    }}
+                >
+                    {isLoading && (
                         <div style={{
                             position: 'absolute',
-                            top: 0,
-                            left: `${(regionStart / totalDuration) * 100}%`,
-                            width: `${(clipDuration / totalDuration) * 100}%`,
-                            height: '100%',
-                            backgroundColor: 'rgba(16, 185, 129, 0.25)',
-                            borderLeft: '2px solid #10B981',
-                            borderRight: '2px solid #10B981',
-                            pointerEvents: 'none',
-                            boxSizing: 'border-box',
-                        }} />
+                            top: 0, left: 0, right: 0, bottom: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'rgba(26, 26, 26, 0.8)',
+                            borderRadius: '8px',
+                            zIndex: 10,
+                        }}>
+                            <span style={{ color: '#10B981', fontSize: '13px' }}>Loading...</span>
+                        </div>
                     )}
+
+                    {/* Waveform wrapper with selection overlay */}
+                    <div style={{ position: 'relative' }}>
+                        <div ref={waveformRef} />
+
+                        {/* Region overlay visualization - positioned over the waveform */}
+                        {totalDuration > 0 && !isLoading && (
+                            <div style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: `${(regionStart / totalDuration) * 100}%`,
+                                width: `${(clipDuration / totalDuration) * 100}%`,
+                                height: '100%',
+                                backgroundColor: 'rgba(16, 185, 129, 0.25)',
+                                borderLeft: '2px solid #10B981',
+                                borderRight: '2px solid #10B981',
+                                pointerEvents: 'none',
+                                boxSizing: 'border-box',
+                            }} />
+                        )}
+                    </div>
                 </div>
             </div>
+
+            {/* Expanded waveform popup */}
+            {isExpanded && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                        zIndex: 9999,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '40px',
+                        animation: 'fadeIn 0.2s ease-out',
+                    }}
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget) setIsExpanded(false);
+                    }}
+                >
+                    <style>{`
+                        @keyframes fadeIn {
+                            from { opacity: 0; }
+                            to { opacity: 1; }
+                        }
+                        @keyframes slideUp {
+                            from { opacity: 0; transform: translateY(20px); }
+                            to { opacity: 1; transform: translateY(0); }
+                        }
+                    `}</style>
+
+                    <div style={{
+                        width: '100%',
+                        maxWidth: '1200px',
+                        backgroundColor: '#1e1e1e',
+                        borderRadius: '16px',
+                        padding: '24px',
+                        animation: 'slideUp 0.3s ease-out',
+                    }}>
+                        {/* Header */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                            <div>
+                                <div style={{ fontSize: '16px', fontWeight: '600', color: '#e0e0e0' }}>{file?.name}</div>
+                                <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
+                                    Click on the waveform to position your {clipDuration}s selection
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setIsExpanded(false)}
+                                style={{
+                                    background: 'transparent',
+                                    border: '1px solid #3a3a3a',
+                                    borderRadius: '8px',
+                                    padding: '8px 16px',
+                                    color: '#888',
+                                    fontSize: '13px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                }}
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M18 6L6 18M6 6l12 12"/>
+                                </svg>
+                                Close
+                            </button>
+                        </div>
+
+                        {/* Large waveform */}
+                        <div
+                            style={{
+                                backgroundColor: '#1a1a1a',
+                                borderRadius: '12px',
+                                padding: '20px',
+                                cursor: 'pointer',
+                                position: 'relative',
+                            }}
+                            onClick={(e) => {
+                                if (totalDuration <= 0) return;
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const clickX = e.clientX - rect.left - 20;
+                                const containerWidth = rect.width - 40;
+                                const clickPercent = Math.max(0, Math.min(1, clickX / containerWidth));
+                                const clickTime = clickPercent * totalDuration;
+                                const newStart = Math.max(0, Math.min(totalDuration - clipDuration, clickTime - clipDuration / 2));
+                                setRegionStart(newStart);
+                            }}
+                        >
+                            {/* Real waveform visualization for expanded view */}
+                            <div style={{ height: '120px', position: 'relative' }}>
+                                {/* Waveform bars from actual audio data */}
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    height: '100%',
+                                    gap: '1px',
+                                }}>
+                                    {waveformPeaks.map((peak, i) => {
+                                        const pos = i / waveformPeaks.length;
+                                        const inSelection = pos >= (regionStart / totalDuration) && pos <= ((regionStart + clipDuration) / totalDuration);
+                                        return (
+                                            <div
+                                                key={i}
+                                                style={{
+                                                    flex: 1,
+                                                    height: `${Math.max(5, peak)}%`,
+                                                    backgroundColor: inSelection ? '#10B981' : '#4a4a4a',
+                                                    borderRadius: '1px',
+                                                    transition: 'background-color 0.1s',
+                                                }}
+                                            />
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Selection overlay */}
+                                <div style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: `${(regionStart / totalDuration) * 100}%`,
+                                    width: `${(clipDuration / totalDuration) * 100}%`,
+                                    height: '100%',
+                                    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                                    borderLeft: '3px solid #10B981',
+                                    borderRight: '3px solid #10B981',
+                                    pointerEvents: 'none',
+                                    boxSizing: 'border-box',
+                                }} />
+                            </div>
+
+                            {/* Time markers */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px' }}>
+                                <span style={{ fontSize: '11px', color: '#666' }}>0:00</span>
+                                <span style={{ fontSize: '11px', color: '#666' }}>{formatTime(totalDuration / 2)}</span>
+                                <span style={{ fontSize: '11px', color: '#666' }}>{formatTime(totalDuration)}</span>
+                            </div>
+                        </div>
+
+                        {/* Selection info and controls */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                {/* Clip duration input */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '13px', color: '#888' }}>Clip Duration:</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max={Math.floor(totalDuration) || 60}
+                                        value={clipDuration}
+                                        onChange={e => handleDurationChange(parseInt(e.target.value) || 1)}
+                                        style={{
+                                            width: '60px',
+                                            backgroundColor: '#2a2a2a',
+                                            border: '1px solid #3a3a3a',
+                                            borderRadius: '6px',
+                                            padding: '8px 10px',
+                                            color: '#10B981',
+                                            fontSize: '14px',
+                                            textAlign: 'center',
+                                            outline: 'none',
+                                        }}
+                                    />
+                                    <span style={{ fontSize: '13px', color: '#888' }}>sec</span>
+                                </div>
+                                {/* Selection time display */}
+                                <div style={{ fontSize: '14px', color: '#10B981', fontWeight: '500' }}>
+                                    Selection: {formatTime(regionStart)} - {formatTime(regionStart + clipDuration)}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    onClick={handlePreview}
+                                    style={{
+                                        padding: '10px 20px',
+                                        borderRadius: '8px',
+                                        border: '1px solid #3a3a3a',
+                                        backgroundColor: '#2a2a2a',
+                                        color: isPlaying ? '#10B981' : '#e0e0e0',
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                    }}
+                                >
+                                    {isPlaying ? (
+                                        <>
+                                            <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
+                                                <rect x="2" y="1" width="3" height="10" rx="1" />
+                                                <rect x="7" y="1" width="3" height="10" rx="1" />
+                                            </svg>
+                                            Stop
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
+                                                <path d="M2 1.5v9l8-4.5-8-4.5z" />
+                                            </svg>
+                                            Preview
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => { setIsExpanded(false); handleAccept(); }}
+                                    style={{
+                                        padding: '10px 24px',
+                                        borderRadius: '8px',
+                                        border: 'none',
+                                        backgroundColor: '#10B981',
+                                        color: '#fff',
+                                        fontSize: '13px',
+                                        fontWeight: '500',
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    Accept Selection
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Selection info */}
             {totalDuration > 0 && (
@@ -1130,8 +1421,8 @@ const SectionCard = ({ section, onUpdate, onRemove }) => {
                     onMouseLeave={e => e.target.style.color = '#555'}
                 >x</button>
             </div>
-            <div style={{ padding: '0 18px 16px 18px' }}>
-                {cfg.hasLyrics ? (
+            {cfg.hasLyrics && (
+                <div style={{ padding: '0 18px 16px 18px' }}>
                     <textarea
                         value={section.lyrics || ''}
                         onChange={e => onUpdate({ lyrics: e.target.value })}
@@ -1148,12 +1439,8 @@ const SectionCard = ({ section, onUpdate, onRemove }) => {
                             outline: 'none',
                         }}
                     />
-                ) : (
-                    <div style={{ color: '#555', fontSize: '14px', textAlign: 'center', padding: '16px 0' }}>
-                        Instrumental
-                    </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -1674,24 +1961,48 @@ const App = () => {
                         {/* Model */}
                         <Card>
                             <CardTitle>Model</CardTitle>
-                            <select
-                                value={selectedModel}
-                                onChange={e => setSelectedModel(e.target.value)}
-                                style={{
-                                    width: '100%',
-                                    backgroundColor: '#1e1e1e',
-                                    border: '1px solid #3a3a3a',
-                                    borderRadius: '10px',
-                                    padding: '12px 14px',
-                                    color: '#e0e0e0',
-                                    fontSize: '13px',
-                                    cursor: 'pointer',
-                                    outline: 'none',
-                                }}
-                            >
-                                {models.map(m => <option key={m.id} value={m.id}>{m.name} - {m.description}</option>)}
-                                {models.length === 0 && <option value="">Loading...</option>}
-                            </select>
+                            <div style={{ position: 'relative' }}>
+                                <select
+                                    className="custom-select"
+                                    value={selectedModel}
+                                    onChange={e => setSelectedModel(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        backgroundColor: '#1e1e1e',
+                                        border: '1px solid #3a3a3a',
+                                        borderRadius: '10px',
+                                        padding: '12px 14px',
+                                        paddingRight: '40px',
+                                        color: '#e0e0e0',
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        outline: 'none',
+                                    }}
+                                >
+                                    {models.map(m => <option key={m.id} value={m.id}>{m.name} - {m.description}</option>)}
+                                    {models.length === 0 && <option value="">Loading...</option>}
+                                </select>
+                                {/* Chevron icon */}
+                                <svg
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="#888"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    style={{
+                                        position: 'absolute',
+                                        right: '14px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        pointerEvents: 'none',
+                                    }}
+                                >
+                                    <path d="M6 9l6 6 6-6"/>
+                                </svg>
+                            </div>
                         </Card>
 
                         {/* Memory Mode */}
@@ -1830,7 +2141,7 @@ const App = () => {
                             </div>
                         </Card>
 
-{/* Advanced Settings */}                        <Card>                            <div onClick={() => setShowAdvanced(!showAdvanced)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: showAdvanced ? '14px' : '0' }}>                                <span style={{ fontSize: '13px', fontWeight: '500', color: '#888' }}>Advanced Settings</span>                                <span style={{ color: '#666', fontSize: '12px' }}>{showAdvanced ? '▲' : '▼'}</span>                            </div>                            {showAdvanced && (                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Style Strength</span><span style={{ color: '#10B981', fontWeight: '500' }}>{cfgCoef.toFixed(1)}</span></div>                                        <input type="range" min="0.1" max="3.0" step="0.1" value={cfgCoef} onChange={e => setCfgCoef(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Higher = follows your style more strictly</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Creativity</span><span style={{ color: '#10B981', fontWeight: '500' }}>{temperature.toFixed(1)}</span></div>                                        <input type="range" min="0.1" max="2.0" step="0.1" value={temperature} onChange={e => setTemperature(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Higher = more experimental</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Variety</span><span style={{ color: '#10B981', fontWeight: '500' }}>{topK}</span></div>                                        <input type="range" min="1" max="250" step="1" value={topK} onChange={e => setTopK(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Musical choices per step</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Focus (Top-P)</span><span style={{ color: '#10B981', fontWeight: '500' }}>{topP.toFixed(1)}</span></div>                                        <input type="range" min="0" max="1.0" step="0.1" value={topP} onChange={e => setTopP(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>0=off, else limits choices by probability</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Extend Stride</span><span style={{ color: '#10B981', fontWeight: '500' }}>{extendStride}</span></div>                                        <input type="range" min="1" max="15" step="1" value={extendStride} onChange={e => setExtendStride(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Overlap for longer songs</div>                                    </div>                                </div>                            )}                        </Card>
+{/* Advanced Settings */}                        <Card>                            <div onClick={() => setShowAdvanced(!showAdvanced)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: showAdvanced ? '14px' : '0' }}>                                <span style={{ fontSize: '13px', fontWeight: '500', color: '#888' }}>Advanced Settings</span>                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s', transform: showAdvanced ? 'rotate(180deg)' : 'rotate(0deg)' }}><path d="M6 9l6 6 6-6"/></svg>                            </div>                            {showAdvanced && (                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Style Strength</span><span style={{ color: '#10B981', fontWeight: '500' }}>{cfgCoef.toFixed(1)}</span></div>                                        <input type="range" min="0.1" max="3.0" step="0.1" value={cfgCoef} onChange={e => setCfgCoef(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Higher = follows your style more strictly</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Creativity</span><span style={{ color: '#10B981', fontWeight: '500' }}>{temperature.toFixed(1)}</span></div>                                        <input type="range" min="0.1" max="2.0" step="0.1" value={temperature} onChange={e => setTemperature(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Higher = more experimental</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Variety</span><span style={{ color: '#10B981', fontWeight: '500' }}>{topK}</span></div>                                        <input type="range" min="1" max="250" step="1" value={topK} onChange={e => setTopK(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Musical choices per step</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Focus (Top-P)</span><span style={{ color: '#10B981', fontWeight: '500' }}>{topP.toFixed(1)}</span></div>                                        <input type="range" min="0" max="1.0" step="0.1" value={topP} onChange={e => setTopP(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>0=off, else limits choices by probability</div>                                    </div>                                    <div>                                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}><span>Extend Stride</span><span style={{ color: '#10B981', fontWeight: '500' }}>{extendStride}</span></div>                                        <input type="range" min="1" max="15" step="1" value={extendStride} onChange={e => setExtendStride(+e.target.value)} />                                        <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>Overlap for longer songs</div>                                    </div>                                </div>                            )}                        </Card>
                         {/* Song Title */}
                         <Card>
                             <CardTitle>Song Title</CardTitle>
