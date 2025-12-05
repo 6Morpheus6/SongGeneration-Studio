@@ -173,6 +173,7 @@ class SongRequest(BaseModel):
 # ============================================================================
 
 generations: dict[str, dict] = {}
+running_processes: dict[str, asyncio.subprocess.Process] = {}  # Track running processes for stop functionality
 
 def restore_library():
     """Restore completed generations from output directory on startup."""
@@ -495,13 +496,28 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
             limit=1024*1024
         )
 
+        # Store process reference for stop functionality
+        running_processes[gen_id] = process
+
         generations[gen_id]["message"] = "Generating song (this takes several minutes)..."
         generations[gen_id]["progress"] = 20
 
         all_stderr = []
+        stopped = False
         while True:
+            # Check if generation was stopped
+            if generations[gen_id].get("status") == "stopped":
+                stopped = True
+                print(f"[GEN {gen_id}] Stop requested, terminating process...")
+                try:
+                    process.terminate()
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    process.kill()
+                break
+
             try:
-                line = await process.stderr.readline()
+                line = await asyncio.wait_for(process.stderr.readline(), timeout=1.0)
                 if not line:
                     break
                 line_str = line.decode('utf-8', errors='ignore').strip()
@@ -517,6 +533,9 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
                             progress = min(95, 20 + (pct * 0.75))
                             generations[gen_id]["progress"] = progress
                             generations[gen_id]["message"] = f"Generating... {pct}%"
+            except asyncio.TimeoutError:
+                # Timeout on readline, just continue to check for stop
+                continue
             except ValueError:
                 chunk = await process.stderr.read(8192)
                 if not chunk:
@@ -529,6 +548,15 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
                         progress = min(95, 20 + (pct * 0.75))
                         generations[gen_id]["progress"] = progress
                         generations[gen_id]["message"] = f"Generating... {pct}%"
+
+        # Clean up process reference
+        running_processes.pop(gen_id, None)
+
+        # If stopped, don't continue
+        if stopped:
+            generations[gen_id]["message"] = "Generation stopped by user"
+            input_file.unlink(missing_ok=True)
+            return
 
         await process.wait()
         stdout = await process.stdout.read()
@@ -719,6 +747,31 @@ async def get_generation_status(gen_id: str):
     if gen_id not in generations:
         raise HTTPException(404, "Generation not found")
     return generations[gen_id]
+
+@app.post("/api/stop/{gen_id}")
+async def stop_generation(gen_id: str):
+    """Stop a running generation."""
+    if gen_id not in generations:
+        raise HTTPException(404, "Generation not found")
+
+    gen = generations[gen_id]
+    if gen["status"] not in ("pending", "processing"):
+        raise HTTPException(400, f"Cannot stop generation with status: {gen['status']}")
+
+    print(f"[API] Stop requested for generation: {gen_id}")
+
+    # Set status to stopped - the run_generation loop will pick this up
+    generations[gen_id]["status"] = "stopped"
+    generations[gen_id]["message"] = "Stopping..."
+
+    # If process exists, try to terminate it directly too
+    if gen_id in running_processes:
+        try:
+            running_processes[gen_id].terminate()
+        except Exception as e:
+            print(f"[API] Error terminating process: {e}")
+
+    return {"status": "stopped", "message": "Generation stop requested"}
 
 def convert_audio(input_path: Path, output_format: str) -> Path:
     """Convert audio file to the specified format using ffmpeg."""
