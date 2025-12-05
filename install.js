@@ -34,14 +34,7 @@ module.exports = {
         ]
       }
     },
-    // 4. Install FFmpeg
-    {
-      method: "shell.run",
-      params: {
-        message: "conda install -y -c conda-forge ffmpeg"
-      }
-    },
-    // 5. Download runtime models (ckpt + third_party)
+    // 4. Download runtime models (ckpt + third_party)
     {
       method: "shell.run",
       params: {
@@ -50,7 +43,7 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-Runtime --local-dir runtime"
       }
     },
-    // 6. Create symlinks for ckpt and third_party
+    // 5. Create symlinks for ckpt and third_party
     {
       method: "shell.run",
       params: {
@@ -65,7 +58,7 @@ module.exports = {
         message: "{{platform === 'win32' ? 'mklink /J third_party \"' + path.resolve(cwd, 'app/runtime/third_party') + '\"' : 'ln -s runtime/third_party third_party'}}"
       }
     },
-    // 7. Download base model (~24GB)
+    // 6. Download base model (~24GB)
     {
       method: "shell.run",
       params: {
@@ -74,7 +67,7 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-base --local-dir songgeneration_base"
       }
     },
-    // 8. Download base-new model
+    // 7. Download base-new model
     {
       method: "shell.run",
       params: {
@@ -83,7 +76,7 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-base-new --local-dir songgeneration_base_new"
       }
     },
-    // 9. Download base-full model
+    // 8. Download base-full model
     {
       method: "shell.run",
       params: {
@@ -92,7 +85,7 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-base-full --local-dir songgeneration_base_full"
       }
     },
-    // 10. Copy API and web files
+    // 9. Copy API and web files
     {
       method: "fs.copy",
       params: {
