@@ -1705,8 +1705,13 @@ const App = () => {
     const [estimatedTime, setEstimatedTime] = useState(null);
     const [elapsedTime, setElapsedTime] = useState(0);
     const [gpuInfo, setGpuInfo] = useState(null);
-    // Queue system
-    const [queue, setQueue] = useState([]);
+    // Queue system - persist to localStorage
+    const [queue, setQueue] = useState(() => {
+        try {
+            const saved = localStorage.getItem('songgen_queue');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
     const [currentGenId, setCurrentGenId] = useState(null);
     const [currentGenPayload, setCurrentGenPayload] = useState(null);
     const pollRef = useRef(null);
@@ -1739,6 +1744,11 @@ const App = () => {
         pollRef.current && clearInterval(pollRef.current);
         timerRef.current && clearInterval(timerRef.current);
     }, []);
+
+    // Persist queue to localStorage
+    useEffect(() => {
+        localStorage.setItem('songgen_queue', JSON.stringify(queue));
+    }, [queue]);
 
     // Auto-set output mode based on lyrics presence
     useEffect(() => {
@@ -1852,12 +1862,40 @@ const App = () => {
         } catch (e) { console.error(e); }
     };
 
-    const loadLibrary = async () => {
+    const loadLibrary = async (restoreGenerating = true) => {
         try {
             const r = await fetch('/api/generations');
             if (r.ok) {
                 const data = await r.json();
                 setLibrary(data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+
+                // Restore any running generation on page load
+                if (restoreGenerating && !currentGenId) {
+                    const runningGen = data.find(item => item.status === 'generating' || item.status === 'processing');
+                    if (runningGen) {
+                        setGenerating(true);
+                        setCurrentGenId(runningGen.id);
+                        setCurrentGenPayload(runningGen.metadata || { title: runningGen.title || 'Untitled' });
+                        setStatus(runningGen.message || 'Generating...');
+                        setProgress(runningGen.progress || 0);
+                        // Restore elapsed time from created_at
+                        if (runningGen.created_at) {
+                            const elapsed = Math.floor((Date.now() - new Date(runningGen.created_at).getTime()) / 1000);
+                            setElapsedTime(elapsed);
+                            setGenStartTime(new Date(runningGen.created_at).getTime());
+                        }
+                        // Estimate time based on model
+                        const model = runningGen.metadata?.model || 'songgeneration_base';
+                        const sections = runningGen.metadata?.sections || 5;
+                        setEstimatedTime(estimateGenerationTime(model, sections));
+                        // Start elapsed time counter
+                        timerRef.current = setInterval(() => {
+                            setElapsedTime(prev => prev + 1);
+                        }, 1000);
+                        // Start polling
+                        pollRef.current = setInterval(() => poll(runningGen.id), 2000);
+                    }
+                }
             }
         } catch (e) { console.error(e); }
     };
@@ -1974,7 +2012,7 @@ const App = () => {
                 setGenStartTime(null);
                 setEstimatedTime(null);
                 setElapsedTime(0);
-                loadLibrary();
+                loadLibrary(false);
                 // Process next in queue
                 setQueue(prev => {
                     if (prev.length > 0) {
@@ -2234,7 +2272,7 @@ const App = () => {
                         Create
                     </button>
                     <button
-                        onClick={() => { setActiveTab('library'); loadLibrary(); }}
+                        onClick={() => { setActiveTab('library'); loadLibrary(false); }}
                         style={{
                             padding: '10px 24px',
                             borderRadius: '10px',
