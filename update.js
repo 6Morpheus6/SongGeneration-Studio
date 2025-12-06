@@ -24,14 +24,9 @@ module.exports = {
       }
     },
     {
-      method: "fs.copy",
+      method: "shell.run",
       params: {
-        src: "web",
-        dest: "app/web",
-        options: {
-          recursive: true,
-          force: true
-        }
+        message: "{{platform === 'win32' ? 'xcopy /E /I /Y web app\\\\web' : 'cp -r web app/'}}"
       }
     }
   ]
