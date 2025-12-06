@@ -2081,8 +2081,8 @@ const App = () => {
         const payload = createPayload();
 
         if (generating) {
-            // Already generating, add to queue
-            setQueue(prev => [...prev, payload]);
+            // Already generating, add to top of queue
+            setQueue(prev => [payload, ...prev]);
         } else {
             // Start immediately
             setGenerating(true);
@@ -2798,48 +2798,7 @@ const App = () => {
                                     </div>
                                 ) : (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                        {/* Currently generating */}
-                                        {currentGenPayload && (
-                                            <div style={{
-                                                backgroundColor: '#1e1e1e',
-                                                borderRadius: '8px',
-                                                padding: '10px',
-                                                border: '1px solid #10B981',
-                                                position: 'relative',
-                                                overflow: 'hidden',
-                                            }}>
-                                                {/* Progress bar background */}
-                                                <div style={{
-                                                    position: 'absolute',
-                                                    top: 0,
-                                                    left: 0,
-                                                    bottom: 0,
-                                                    width: estimatedTime > 0 ? `${Math.min((elapsedTime / estimatedTime) * 100, 100)}%` : '30%',
-                                                    background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.05) 100%)',
-                                                    transition: 'width 0.5s ease',
-                                                }} />
-                                                <div style={{ position: 'relative', zIndex: 1 }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                                        <div style={{
-                                                            width: '8px',
-                                                            height: '8px',
-                                                            borderRadius: '50%',
-                                                            backgroundColor: '#10B981',
-                                                            animation: 'pulse 1.5s infinite',
-                                                        }} />
-                                                        <span style={{ fontSize: '12px', fontWeight: '500', color: '#e0e0e0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                            {currentGenPayload.title || 'Untitled'}
-                                                        </span>
-                                                    </div>
-                                                    <div style={{ fontSize: '10px', color: '#888', display: 'flex', justifyContent: 'space-between' }}>
-                                                        <span>Generating...</span>
-                                                        <span>{formatTime(elapsedTime)}{estimatedTime > 0 ? ` / ~${formatTime(estimatedTime)}` : ''}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* Queued items */}
+                                        {/* Queued items (shown above generating) */}
                                         {queue.map((item, index) => (
                                             <div key={`q-${index}`} style={{
                                                 backgroundColor: '#1e1e1e',
@@ -2882,6 +2841,47 @@ const App = () => {
                                                 <div style={{ fontSize: '10px', color: '#666' }}>In queue</div>
                                             </div>
                                         ))}
+
+                                        {/* Currently generating */}
+                                        {currentGenPayload && (
+                                            <div style={{
+                                                backgroundColor: '#1e1e1e',
+                                                borderRadius: '8px',
+                                                padding: '10px',
+                                                border: '1px solid #10B981',
+                                                position: 'relative',
+                                                overflow: 'hidden',
+                                            }}>
+                                                {/* Progress bar background */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    top: 0,
+                                                    left: 0,
+                                                    bottom: 0,
+                                                    width: estimatedTime > 0 ? `${Math.min((elapsedTime / estimatedTime) * 100, 100)}%` : '30%',
+                                                    background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.05) 100%)',
+                                                    transition: 'width 0.5s ease',
+                                                }} />
+                                                <div style={{ position: 'relative', zIndex: 1 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                                        <div style={{
+                                                            width: '8px',
+                                                            height: '8px',
+                                                            borderRadius: '50%',
+                                                            backgroundColor: '#10B981',
+                                                            animation: 'pulse 1.5s infinite',
+                                                        }} />
+                                                        <span style={{ fontSize: '12px', fontWeight: '500', color: '#e0e0e0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {currentGenPayload.title || 'Untitled'}
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ fontSize: '10px', color: '#888', display: 'flex', justifyContent: 'space-between' }}>
+                                                        <span>Generating...</span>
+                                                        <span>{formatTime(elapsedTime)}{estimatedTime > 0 ? ` / ~${formatTime(estimatedTime)}` : ''}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
 
                                         {/* All library items */}
                                         {library.map(item => {
@@ -2975,7 +2975,17 @@ const App = () => {
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            {/* Currently generating item first */}
+                            {/* Queued items first (newest at top) */}
+                            {queue.map((item, index) => (
+                                <LibraryItem
+                                    key={`queue-${index}`}
+                                    item={item}
+                                    isQueued={true}
+                                    queuePosition={index + 1}
+                                    onRemoveFromQueue={() => removeFromQueue(index)}
+                                />
+                            ))}
+                            {/* Currently generating item */}
                             {currentGenPayload && (
                                 <LibraryItem
                                     key="generating"
@@ -2987,16 +2997,6 @@ const App = () => {
                                     estimatedTime={estimatedTime}
                                 />
                             )}
-                            {/* Queued items next */}
-                            {queue.map((item, index) => (
-                                <LibraryItem
-                                    key={`queue-${index}`}
-                                    item={item}
-                                    isQueued={true}
-                                    queuePosition={index + 1}
-                                    onRemoveFromQueue={() => removeFromQueue(index)}
-                                />
-                            ))}
                             {/* Library items (exclude currently generating one to avoid duplicate) */}
                             {library.filter(item => !currentGenId || item.id !== currentGenId).map(item => <LibraryItem key={item.id} item={item} onDelete={() => deleteGeneration(item.id)} onPlay={playActivityAudio} isCurrentlyPlaying={activityPlayingId === item.id} isAudioPlaying={isAudioPlaying} />)}
                         </div>
