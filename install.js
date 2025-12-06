@@ -43,19 +43,19 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-Runtime --local-dir runtime"
       }
     },
-    // 5. Create symlinks for ckpt and third_party
+    // 5. Create symlinks for ckpt and third_party (using relative paths)
     {
       method: "shell.run",
       params: {
         path: "app",
-        message: "{{platform === 'win32' ? 'mklink /J ckpt \"' + path.resolve(cwd, 'app/runtime/ckpt') + '\"' : 'ln -s runtime/ckpt ckpt'}}"
+        message: "{{platform === 'win32' ? 'mklink /J ckpt runtime\\\\ckpt' : 'ln -s runtime/ckpt ckpt'}}"
       }
     },
     {
       method: "shell.run",
       params: {
         path: "app",
-        message: "{{platform === 'win32' ? 'mklink /J third_party \"' + path.resolve(cwd, 'app/runtime/third_party') + '\"' : 'ln -s runtime/third_party third_party'}}"
+        message: "{{platform === 'win32' ? 'mklink /J third_party runtime\\\\third_party' : 'ln -s runtime/third_party third_party'}}"
       }
     },
     // 6. Download base model (~24GB)
@@ -85,7 +85,7 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-base-full --local-dir songgeneration_base_full"
       }
     },
-    // 9. Copy API and web files
+    // 9. Copy API file
     {
       method: "fs.copy",
       params: {
@@ -93,25 +93,16 @@ module.exports = {
         dest: "app/api.py"
       }
     },
-    {
-      method: "shell.run",
-      params: {
-        path: "app",
-        message: "{{platform === 'win32' ? 'if not exist web\\static mkdir web\\static' : 'mkdir -p web/static'}}"
-      }
-    },
+    // 10. Copy web folder (with recursive option for folders)
     {
       method: "fs.copy",
       params: {
-        src: "web/static/index.html",
-        dest: "app/web/static/index.html"
-      }
-    },
-    {
-      method: "fs.copy",
-      params: {
-        src: "web/static/Logo_1.png",
-        dest: "app/web/static/Logo_1.png"
+        src: "web",
+        dest: "app/web",
+        options: {
+          recursive: true,
+          force: true
+        }
       }
     }
   ]

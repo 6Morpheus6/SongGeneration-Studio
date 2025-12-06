@@ -27,7 +27,11 @@ module.exports = {
       method: "fs.copy",
       params: {
         src: "web",
-        dest: "app/web"
+        dest: "app/web",
+        options: {
+          recursive: true,
+          force: true
+        }
       }
     }
   ]
