@@ -93,11 +93,25 @@ module.exports = {
         dest: "app/api.py"
       }
     },
-    // 10. Copy web folder
+    // 10. Create web/static directory and copy files
     {
-      method: "shell.run",
+      method: "fs.mkdir",
       params: {
-        message: "{{platform === 'win32' ? 'xcopy /E /I /Y web app\\\\web' : 'cp -r web app/'}}"
+        path: "app/web/static"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "web/static/index.html",
+        dest: "app/web/static/index.html"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "web/static/Logo_1.png",
+        dest: "app/web/static/Logo_1.png"
       }
     }
   ]
