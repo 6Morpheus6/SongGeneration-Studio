@@ -43,19 +43,19 @@ module.exports = {
         message: "huggingface-cli download lglg666/SongGeneration-Runtime --local-dir runtime"
       }
     },
-    // 5. Create symlinks for ckpt and third_party (using relative paths)
+    // 5. Create junction links for ckpt and third_party
     {
-      method: "shell.run",
+      method: "fs.link",
       params: {
-        path: "app",
-        message: "{{platform === 'win32' ? 'mklink /J ckpt runtime\\\\ckpt' : 'ln -s runtime/ckpt ckpt'}}"
+        src: "app/runtime/ckpt",
+        dest: "app/ckpt"
       }
     },
     {
-      method: "shell.run",
+      method: "fs.link",
       params: {
-        path: "app",
-        message: "{{platform === 'win32' ? 'mklink /J third_party runtime\\\\third_party' : 'ln -s runtime/third_party third_party'}}"
+        src: "app/runtime/third_party",
+        dest: "app/third_party"
       }
     },
     // 6. Download base model (~24GB)
