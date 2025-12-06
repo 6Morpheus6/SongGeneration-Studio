@@ -1,6 +1,21 @@
 module.exports = {
   daemon: true,
   run: [
+    // Sync tracked files (api.py, web/) to app folder before starting
+    {
+      method: "fs.copy",
+      params: {
+        src: "api.py",
+        dest: "app/api.py"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "web",
+        dest: "app/web"
+      }
+    },
     {
       method: "shell.run",
       params: {
