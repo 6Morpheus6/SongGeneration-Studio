@@ -434,7 +434,7 @@ var App = () => {
         const payload = createPayload();
 
         if (generating) {
-            setQueue(prev => [payload, ...prev]);
+            setQueue(prev => [...prev, payload]);  // Add to end of queue (FIFO)
         } else {
             setGenerating(true);
             startGeneration(payload);
