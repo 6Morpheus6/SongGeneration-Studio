@@ -1027,8 +1027,17 @@ async def export_video(gen_id: str, background_tasks: BackgroundTasks):
     # Get audio duration
     duration_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                     '-of', 'default=noprint_wrappers=1:nokey=1', str(audio_file)]
-    duration_result = subprocess.run(duration_cmd, capture_output=True, text=True)
-    duration = float(duration_result.stdout.strip())
+    try:
+        duration_result = subprocess.run(duration_cmd, capture_output=True, text=True, timeout=30)
+        if duration_result.returncode != 0 or not duration_result.stdout.strip():
+            print(f"[API] ffprobe failed: {duration_result.stderr}")
+            raise HTTPException(500, f"Failed to get audio duration. Is ffmpeg/ffprobe installed? Error: {duration_result.stderr}")
+        duration = float(duration_result.stdout.strip())
+    except ValueError as e:
+        print(f"[API] Failed to parse duration: {duration_result.stdout}")
+        raise HTTPException(500, f"Failed to parse audio duration: {e}")
+    except FileNotFoundError:
+        raise HTTPException(500, "ffprobe not found. Please ensure ffmpeg is installed and in PATH.")
 
     print(f"[API] Exporting video for {gen_id}, duration: {duration}s")
 

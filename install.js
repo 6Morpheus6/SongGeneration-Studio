@@ -34,6 +34,13 @@ module.exports = {
         ]
       }
     },
+    // 3b. Install ffmpeg (required for MP4 video export)
+    {
+      method: "shell.run",
+      params: {
+        message: "conda install -y ffmpeg -c conda-forge"
+      }
+    },
     // 4. Download runtime files (ckpt + third_party) directly to app/
     {
       method: "hf.download",
