@@ -1121,7 +1121,7 @@ var App = () => {
                                         No activity yet
                                     </div>
                                 ) : (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingBottom: '80px' }}>
                                         {/* Queued items */}
                                         {queue.map((item, index) => (
                                             <div key={`q-${index}`} style={{
@@ -1217,6 +1217,8 @@ var App = () => {
                                             const isPlaying = activityPlayingId === item.id;
                                             const canPlay = item.status === 'completed' && (item.output_file || (item.output_files && item.output_files.length > 0));
                                             const isFailed = item.status === 'failed' || item.status === 'stopped';
+                                            const hasCover = meta.cover;
+                                            const coverUrl = hasCover ? `/api/generation/${item.id}/cover` : null;
                                             return (
                                                 <div key={item.id}
                                                     className={`activity-item ${isPlaying ? 'active' : ''} ${isFailed ? 'error' : ''}`}
@@ -1234,18 +1236,32 @@ var App = () => {
                                                         justifyContent: 'center',
                                                         flexShrink: 0,
                                                         transition: 'all 0.15s',
+                                                        backgroundImage: coverUrl ? `url(${coverUrl})` : 'none',
+                                                        backgroundSize: 'cover',
+                                                        backgroundPosition: 'center',
+                                                        position: 'relative',
                                                     }}>
                                                         {canPlay ? (
-                                                            isPlaying && isAudioPlaying ? (
-                                                                <PauseLargeIcon size={16} color="#fff" />
-                                                            ) : (
-                                                                <PlayLargeIcon size={16} color={isPlaying ? '#fff' : '#888'} style={{ marginLeft: '2px' }} />
-                                                            )
+                                                            <div style={{
+                                                                width: '100%',
+                                                                height: '100%',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                backgroundColor: coverUrl ? 'rgba(0,0,0,0.4)' : 'transparent',
+                                                                borderRadius: '6px',
+                                                            }}>
+                                                                {isPlaying && isAudioPlaying ? (
+                                                                    <PauseLargeIcon size={16} color="#fff" />
+                                                                ) : (
+                                                                    <PlayLargeIcon size={16} color={coverUrl ? '#fff' : (isPlaying ? '#fff' : '#888')} style={{ marginLeft: '2px' }} />
+                                                                )}
+                                                            </div>
                                                         ) : isFailed ? (
                                                             <CloseIcon color="#fff" />
-                                                        ) : (
+                                                        ) : !coverUrl ? (
                                                             <MusicNoteIcon size={16} color="#666" />
-                                                        )}
+                                                        ) : null}
                                                     </div>
                                                     {/* Song Info */}
                                                     <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
@@ -1309,7 +1325,7 @@ var App = () => {
                                     estimatedTime={estimatedTime}
                                 />
                             )}
-                            {library.filter(item => !currentGenId || item.id !== currentGenId).map(item => <LibraryItem key={item.id} item={item} onDelete={() => deleteGeneration(item.id)} onPlay={playActivityAudio} isCurrentlyPlaying={activityPlayingId === item.id} isAudioPlaying={isAudioPlaying} />)}
+                            {library.filter(item => !currentGenId || item.id !== currentGenId).map(item => <LibraryItem key={item.id} item={item} onDelete={() => deleteGeneration(item.id)} onPlay={playActivityAudio} onUpdate={loadLibrary} isCurrentlyPlaying={activityPlayingId === item.id} isAudioPlaying={isAudioPlaying} />)}
                         </div>
                     )}
                 </div>

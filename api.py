@@ -843,6 +843,274 @@ async def delete_generation(gen_id: str):
 
     return {"status": "deleted", "message": "Generation deleted successfully"}
 
+class UpdateGenerationRequest(BaseModel):
+    title: Optional[str] = None
+
+@app.put("/api/generation/{gen_id}")
+async def update_generation(gen_id: str, request: UpdateGenerationRequest):
+    """Update generation metadata (title, etc.)."""
+    output_subdir = OUTPUT_DIR / gen_id
+    metadata_path = output_subdir / "metadata.json"
+
+    # Check if generation exists (in memory or on disk)
+    if gen_id not in generations and not output_subdir.exists():
+        raise HTTPException(404, "Generation not found")
+
+    # Load existing metadata
+    metadata = {}
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+        except Exception as e:
+            print(f"[API] Error loading metadata: {e}")
+
+    # Update fields
+    if request.title is not None:
+        metadata["title"] = request.title
+        # Update in-memory if exists
+        if gen_id in generations:
+            generations[gen_id]["title"] = request.title
+            if "metadata" in generations[gen_id]:
+                generations[gen_id]["metadata"]["title"] = request.title
+
+    # Save updated metadata
+    try:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[API] Error saving metadata: {e}")
+        raise HTTPException(500, f"Failed to save metadata: {e}")
+
+    print(f"[API] Updated generation {gen_id}: title='{request.title}'")
+    return {"status": "updated", "metadata": metadata}
+
+@app.post("/api/generation/{gen_id}/cover")
+async def upload_cover(gen_id: str, file: UploadFile = File(...)):
+    """Upload an album cover image for a generation."""
+    output_subdir = OUTPUT_DIR / gen_id
+
+    # Check if generation exists (in memory or on disk)
+    if gen_id not in generations and not output_subdir.exists():
+        raise HTTPException(404, "Generation not found")
+
+    allowed_ext = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+    if not file.filename.lower().endswith(allowed_ext):
+        raise HTTPException(400, f"Invalid file type. Allowed: {allowed_ext}")
+
+    if not output_subdir.exists():
+        output_subdir.mkdir(parents=True, exist_ok=True)
+
+    # Save cover image (always as cover.jpg/png based on upload)
+    ext = Path(file.filename).suffix.lower()
+    cover_path = output_subdir / f"cover{ext}"
+
+    # Remove any existing cover files
+    for old_cover in output_subdir.glob("cover.*"):
+        old_cover.unlink()
+
+    content = await file.read()
+    with open(cover_path, 'wb') as f:
+        f.write(content)
+
+    # Update metadata
+    metadata_path = output_subdir / "metadata.json"
+    metadata = {}
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+        except:
+            pass
+
+    metadata["cover"] = f"cover{ext}"
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+    # Update in-memory generation if exists
+    if gen_id in generations:
+        if "metadata" not in generations[gen_id]:
+            generations[gen_id]["metadata"] = {}
+        generations[gen_id]["metadata"]["cover"] = f"cover{ext}"
+
+    print(f"[API] Uploaded cover for {gen_id}: {cover_path} ({len(content)} bytes)")
+    return {"status": "uploaded", "cover": f"cover{ext}"}
+
+@app.get("/api/generation/{gen_id}/cover")
+async def get_cover(gen_id: str):
+    """Get the album cover image for a generation."""
+    output_subdir = OUTPUT_DIR / gen_id
+
+    # Check if generation exists (in memory or on disk)
+    if gen_id not in generations and not output_subdir.exists():
+        raise HTTPException(404, "Generation not found")
+
+    # Look for cover file
+    for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+        cover_path = output_subdir / f"cover{ext}"
+        if cover_path.exists():
+            media_types = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp'
+            }
+            return FileResponse(cover_path, media_type=media_types.get(ext, 'image/jpeg'))
+
+    raise HTTPException(404, "No cover image found")
+
+@app.get("/api/generation/{gen_id}/video")
+async def export_video(gen_id: str, background_tasks: BackgroundTasks):
+    """Export generation as MP4 video with waveform visualization."""
+    import subprocess
+    import tempfile
+
+    output_subdir = OUTPUT_DIR / gen_id
+
+    # Check if generation exists (in memory or on disk)
+    if gen_id in generations:
+        gen = generations[gen_id]
+        if gen["status"] != "completed":
+            raise HTTPException(400, "Generation not completed")
+    elif output_subdir.exists():
+        # Load from disk - check for metadata
+        metadata_path = output_subdir / "metadata.json"
+        if metadata_path.exists():
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                gen = {"metadata": json.load(f), "status": "completed"}
+        else:
+            gen = {"metadata": {}, "status": "completed"}
+    else:
+        raise HTTPException(404, "Generation not found")
+
+    # Find the audio file (check both main dir and audios/ subdirectory)
+    audio_file = None
+    search_dirs = [output_subdir, output_subdir / "audios"]
+    for search_dir in search_dirs:
+        if not search_dir.exists():
+            continue
+        for ext in ['.wav', '.mp3', '.flac']:
+            for f in search_dir.glob(f'*{ext}'):
+                audio_file = f
+                break
+            if audio_file:
+                break
+        if audio_file:
+            break
+
+    if not audio_file:
+        raise HTTPException(404, f"Audio file not found in {output_subdir}")
+
+    # Find cover image or use default
+    cover_path = None
+    for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+        cp = output_subdir / f"cover{ext}"
+        if cp.exists():
+            cover_path = cp
+            break
+
+    if not cover_path:
+        # Use default background
+        cover_path = Path(__file__).parent / "web" / "static" / "default.jpg"
+        if not cover_path.exists():
+            raise HTTPException(500, "Default background image not found")
+
+    # Create temp directory for video export
+    temp_dir = Path(tempfile.gettempdir()) / "songgen_videos"
+    temp_dir.mkdir(exist_ok=True)
+
+    # Output video path
+    video_path = temp_dir / f"{gen_id}.mp4"
+    waveform_path = temp_dir / f"{gen_id}_waveform.png"
+
+    # Get audio duration
+    duration_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1', str(audio_file)]
+    duration_result = subprocess.run(duration_cmd, capture_output=True, text=True)
+    duration = float(duration_result.stdout.strip())
+
+    print(f"[API] Exporting video for {gen_id}, duration: {duration}s")
+
+    # Step 1: Generate bright waveform image
+    waveform_cmd = [
+        'ffmpeg', '-y', '-i', str(audio_file),
+        '-filter_complex',
+        'showwavespic=s=1880x160:colors=#10B981|#10B981:scale=sqrt',
+        '-frames:v', '1',
+        str(waveform_path)
+    ]
+    result = subprocess.run(waveform_cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        print(f"[API] Waveform generation failed: {result.stderr}")
+        raise HTTPException(500, f"Waveform generation failed: {result.stderr}")
+
+    # Step 2: Create video with progressive waveform reveal
+    # IMPORTANT: drawbox does NOT support 't' variable for animation!
+    # Must use color source + overlay filter instead, as overlay DOES support 't'
+    # Reference: https://video.stackexchange.com/questions/30305/
+
+    filter_complex = (
+        # Scale background image
+        f"[1:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080[bg];"
+        # Add semi-transparent dark bar at bottom (static, so drawbox is fine here)
+        f"[bg]drawbox=x=0:y=ih-220:w=iw:h=220:color=black@0.7:t=fill[bg2];"
+        # Overlay bright waveform
+        f"[bg2][2:v]overlay=20:H-190[v1];"
+        # Create dark overlay rectangle for unplayed portion (color source with alpha)
+        f"color=c=0x0d1f17:s=1880x160:r=30,format=rgba,colorchannelmixer=aa=0.75[dark];"
+        # Animate dark overlay using overlay filter - 't' works here!
+        # Moves right over time, revealing the bright waveform progressively
+        f"[v1][dark]overlay=x='20+(t/{duration})*1880':y=H-190:shortest=1[v2];"
+        # Create white progress line (4px wide)
+        f"color=c=white:s=4x164:r=30[line];"
+        # Animate progress line - follows the reveal edge
+        f"[v2][line]overlay=x='18+(t/{duration})*1880':y=H-192:shortest=1[v3];"
+        # Create glow effect (wider, semi-transparent)
+        f"color=c=white:s=12x164:r=30,format=rgba,colorchannelmixer=aa=0.2[glow];"
+        # Animate glow
+        f"[v3][glow]overlay=x='12+(t/{duration})*1880':y=H-192:shortest=1[vout]"
+    )
+
+    video_cmd = [
+        'ffmpeg', '-y',
+        '-i', str(audio_file),                # Input 0: audio
+        '-loop', '1', '-i', str(cover_path),  # Input 1: background image
+        '-loop', '1', '-i', str(waveform_path),  # Input 2: waveform
+        '-filter_complex', filter_complex,
+        '-map', '[vout]',
+        '-map', '0:a',
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-pix_fmt', 'yuv420p',
+        '-shortest',
+        '-t', str(duration),
+        str(video_path)
+    ]
+
+    print(f"[API] Running FFmpeg video export...")
+    result = subprocess.run(video_cmd, capture_output=True, text=True, timeout=600)
+
+    if result.returncode != 0:
+        print(f"[API] Video export failed: {result.stderr}")
+        raise HTTPException(500, f"Video export failed: {result.stderr}")
+
+    print(f"[API] Video exported successfully: {video_path}")
+
+    # Clean up waveform image
+    if waveform_path.exists():
+        waveform_path.unlink()
+
+    title = gen.get("title", gen.get("metadata", {}).get("title", "song"))
+    return FileResponse(
+        video_path,
+        media_type='video/mp4',
+        filename=f"{title}.mp4"
+    )
+
 def convert_audio(input_path: Path, output_format: str) -> Path:
     """Convert audio file to the specified format using ffmpeg."""
     import subprocess

@@ -108,6 +108,13 @@ var TrashIcon = ({ size = 10, color = 'currentColor' }) => (
     </svg>
 );
 
+var EditIcon = ({ size = 14, color = 'currentColor' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+    </svg>
+);
+
 var SkipBackIcon = ({ size = 20, color = 'currentColor' }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
         <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
@@ -1203,10 +1210,236 @@ var SectionCard = ({ section, onUpdate, onRemove }) => {
     );
 };
 
+// Edit Modal component
+var EditModal = ({ item, onClose, onSave }) => {
+    const [title, setTitle] = useState(item.metadata?.title || item.title || '');
+    const [coverPreview, setCoverPreview] = useState(null);
+    const [coverFile, setCoverFile] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const [hasCover, setHasCover] = useState(false);
+    const fileInputRef = useRef(null);
+
+    // Check if cover exists on mount
+    useEffect(() => {
+        fetch(`/api/generation/${item.id}/cover`, { method: 'HEAD' })
+            .then(r => { if (r.ok) setHasCover(true); })
+            .catch(() => {});
+    }, [item.id]);
+
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            setCoverFile(file);
+            const reader = new FileReader();
+            reader.onload = (e) => setCoverPreview(e.target.result);
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        try {
+            // Update title
+            await fetch(`/api/generation/${item.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title })
+            });
+
+            // Upload cover if selected
+            if (coverFile) {
+                const formData = new FormData();
+                formData.append('file', coverFile);
+                await fetch(`/api/generation/${item.id}/cover`, {
+                    method: 'POST',
+                    body: formData
+                });
+            }
+
+            onSave && onSave();
+            onClose();
+        } catch (e) {
+            console.error('Save failed:', e);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+        }} onClick={onClose}>
+            <div style={{
+                backgroundColor: '#282828',
+                borderRadius: '16px',
+                padding: '24px',
+                width: '400px',
+                maxWidth: '90vw',
+                border: '1px solid #3a3a3a',
+            }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: '18px', fontWeight: '600', color: '#e0e0e0', marginBottom: '20px' }}>
+                    Edit Song
+                </div>
+
+                {/* Title Input */}
+                <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#888', marginBottom: '8px' }}>Title</label>
+                    <input
+                        type="text"
+                        value={title}
+                        onChange={e => setTitle(e.target.value)}
+                        style={{
+                            width: '100%',
+                            backgroundColor: '#1e1e1e',
+                            border: '1px solid #3a3a3a',
+                            borderRadius: '8px',
+                            padding: '12px',
+                            color: '#e0e0e0',
+                            fontSize: '14px',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                        }}
+                        placeholder="Enter song title..."
+                    />
+                </div>
+
+                {/* Album Cover Upload */}
+                <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#888', marginBottom: '8px' }}>Album Cover</label>
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                        {/* Preview */}
+                        <div style={{
+                            width: '100px',
+                            height: '100px',
+                            borderRadius: '8px',
+                            backgroundColor: '#1e1e1e',
+                            border: '1px solid #3a3a3a',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            overflow: 'hidden',
+                            flexShrink: 0,
+                        }}>
+                            {coverPreview ? (
+                                <img src={coverPreview} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : hasCover ? (
+                                <img src={`/api/generation/${item.id}/cover?t=${Date.now()}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                                <MusicNoteIcon size={32} color="#444" />
+                            )}
+                        </div>
+                        {/* Upload Button */}
+                        <div style={{ flex: 1 }}>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/*"
+                                onChange={handleFileSelect}
+                                style={{ display: 'none' }}
+                            />
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                style={{
+                                    width: '100%',
+                                    padding: '10px 16px',
+                                    backgroundColor: '#1e1e1e',
+                                    border: '1px dashed #3a3a3a',
+                                    borderRadius: '8px',
+                                    color: '#888',
+                                    cursor: 'pointer',
+                                    fontSize: '13px',
+                                    marginBottom: '8px',
+                                }}
+                            >
+                                Choose Image...
+                            </button>
+                            <div style={{ fontSize: '11px', color: '#555' }}>
+                                JPG, PNG, GIF or WebP. Square recommended.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Buttons */}
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                        onClick={onClose}
+                        style={{
+                            padding: '10px 20px',
+                            backgroundColor: '#1e1e1e',
+                            border: '1px solid #3a3a3a',
+                            borderRadius: '8px',
+                            color: '#888',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                        }}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        style={{
+                            padding: '10px 20px',
+                            backgroundColor: '#10B981',
+                            border: 'none',
+                            borderRadius: '8px',
+                            color: '#fff',
+                            cursor: saving ? 'not-allowed' : 'pointer',
+                            fontSize: '14px',
+                            fontWeight: '500',
+                            opacity: saving ? 0.7 : 1,
+                        }}
+                    >
+                        {saving ? 'Saving...' : 'Save'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // Library item component
-var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQueue, onStop, onDelete, onPlay, isCurrentlyPlaying, isAudioPlaying, status, elapsedTime, estimatedTime }) => {
+var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQueue, onStop, onDelete, onPlay, onUpdate, isCurrentlyPlaying, isAudioPlaying, status, elapsedTime, estimatedTime }) => {
     const [expanded, setExpanded] = useState(false);
+    const [editing, setEditing] = useState(false);
+    const [exportingMp4, setExportingMp4] = useState(false);
+    const [exportError, setExportError] = useState(null);
     const meta = (isQueued || isGenerating) ? item : (item.metadata || {});
+
+    // Initialize coverUrl from metadata if available (prevents flash on re-render)
+    const [coverUrl, setCoverUrl] = useState(() => {
+        if (!isQueued && !isGenerating && item.id && meta.cover) {
+            return `/api/generation/${item.id}/cover?t=${Date.now()}`;
+        }
+        return null;
+    });
+
+    // Check for cover image - also watch metadata.cover for updates
+    useEffect(() => {
+        if (!isQueued && !isGenerating && item.id) {
+            // If metadata already indicates a cover exists, use it directly
+            if (meta.cover) {
+                setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+            } else {
+                // Otherwise check via HEAD request
+                fetch(`/api/generation/${item.id}/cover`, { method: 'HEAD' })
+                    .then(r => {
+                        if (r.ok) setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+                    })
+                    .catch(() => {});
+            }
+        }
+    }, [item.id, isQueued, isGenerating, meta.cover]);
 
     const formatDate = (dateStr) => {
         if (!dateStr) return 'Unknown';
@@ -1228,6 +1461,37 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
     const canPlay = !isQueued && !isGenerating && item.status === 'completed' && (item.output_files?.length > 0 || item.output_file);
     const albumClass = isCurrentlyPlaying ? 'playing' : isGenerating ? 'generating' : isQueued ? 'queued' : item.status === 'failed' ? 'failed' : 'default';
 
+    // Export as MP4 video with progress feedback
+    const exportMp4 = async () => {
+        if (exportingMp4) return;
+        setExportingMp4(true);
+        setExportError(null);
+
+        try {
+            const response = await fetch(`/api/generation/${item.id}/video`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || 'Export failed');
+            }
+
+            // Get the blob and trigger download
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${item.title || meta.title || 'song'}.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('MP4 export error:', err);
+            setExportError(err.message);
+        } finally {
+            setExportingMp4(false);
+        }
+    };
+
     return (
         <div className="card-base" style={{
             padding: '12px',
@@ -1242,19 +1506,26 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
             <div
                 onClick={() => canPlay && onPlay && onPlay(item)}
                 className={`album-cover ${albumClass}`}
-                style={{ cursor: canPlay ? 'pointer' : 'default' }}
+                style={{
+                    cursor: canPlay ? 'pointer' : 'default',
+                    backgroundImage: coverUrl ? `url(${coverUrl})` : 'none',
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                }}
             >
                 {isGenerating ? (
                     <SpinnerIcon />
                 ) : canPlay ? (
-                    isCurrentlyPlaying && isAudioPlaying ? (
-                        <PauseLargeIcon />
-                    ) : (
-                        <PlayLargeIcon style={{ marginLeft: '3px' }} />
-                    )
-                ) : (
+                    <div className="album-cover-overlay">
+                        {isCurrentlyPlaying && isAudioPlaying ? (
+                            <PauseLargeIcon />
+                        ) : (
+                            <PlayLargeIcon style={{ marginLeft: '3px' }} />
+                        )}
+                    </div>
+                ) : !coverUrl ? (
                     <MusicNoteIcon />
-                )}
+                ) : null}
             </div>
 
             {/* Song Info */}
@@ -1279,15 +1550,86 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
 
             {/* Action Buttons */}
             <div className="flex gap-2 items-center" style={{ flexShrink: 0 }}>
-                {canPlay && (<>{['FLAC', 'MP3'].map((fmt) => (<button key={fmt} className="btn-icon btn-success" onClick={() => { const a = document.createElement('a'); a.href = `/api/audio/${item.id}/0?format=${fmt.toLowerCase()}`; a.download = `${item.title || 'song'}.${fmt.toLowerCase()}`; a.click(); }}>{fmt}</button>))}</>)}
+                {canPlay && (
+                    <>
+                        {['FLAC', 'MP3'].map((fmt) => (
+                            <button key={fmt} className="btn-icon btn-success" onClick={() => {
+                                const a = document.createElement('a');
+                                a.href = `/api/audio/${item.id}/0?format=${fmt.toLowerCase()}`;
+                                a.download = `${item.title || 'song'}.${fmt.toLowerCase()}`;
+                                a.click();
+                            }}>{fmt}</button>
+                        ))}
+                        <button
+                            className="btn-icon btn-success"
+                            onClick={exportMp4}
+                            disabled={exportingMp4}
+                            style={{ opacity: exportingMp4 ? 0.7 : 1, minWidth: '50px' }}
+                            title={exportError ? `Error: ${exportError}` : 'Export as MP4 video with waveform visualization'}
+                        >
+                            {exportingMp4 ? (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <span style={{
+                                        width: '10px',
+                                        height: '10px',
+                                        border: '2px solid #10B981',
+                                        borderTopColor: 'transparent',
+                                        borderRadius: '50%',
+                                        animation: 'spin 1s linear infinite',
+                                        display: 'inline-block'
+                                    }} />
+                                </span>
+                            ) : 'MP4'}
+                        </button>
+                    </>
+                )}
                 {isGenerating && <button className="btn-icon btn-danger" onClick={onStop}>Stop</button>}
                 {isQueued && <button className="btn-icon btn-danger" onClick={onRemoveFromQueue}>Remove</button>}
+                {!isQueued && !isGenerating && item.status === 'completed' && (
+                    <button className="btn-icon" onClick={() => setEditing(true)} title="Edit"><EditIcon /></button>
+                )}
                 <button className="btn-icon" onClick={() => setExpanded(!expanded)}>{expanded ? 'Hide' : 'Details'}</button>
                 {!isQueued && !isGenerating && (item.status === 'completed' || item.status === 'failed' || item.status === 'stopped') && (
                     <button className="btn-icon" onClick={onDelete} title="Delete"><TrashIcon /></button>
                 )}
             </div>
             </div>
+
+            {/* Edit Modal */}
+            {editing && (
+                <EditModal
+                    item={item}
+                    onClose={() => setEditing(false)}
+                    onSave={() => {
+                        setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+                        onUpdate && onUpdate();
+                    }}
+                />
+            )}
+
+            {/* MP4 Export Error Message */}
+            {exportError && (
+                <div style={{
+                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                    borderRadius: '8px',
+                    padding: '10px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: '#EF4444', fontWeight: '500', fontSize: '13px' }}>MP4 Export Failed:</span>
+                        <span style={{ color: '#f87171', fontSize: '12px' }}>{exportError}</span>
+                    </div>
+                    <button
+                        onClick={() => setExportError(null)}
+                        style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: '4px' }}
+                    >
+                        <CloseIcon size={14} />
+                    </button>
+                </div>
+            )}
 
             {/* Expanded details */}
             {expanded && (

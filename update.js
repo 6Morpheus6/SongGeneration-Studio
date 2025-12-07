@@ -57,6 +57,13 @@ module.exports = {
         src: "web/static/Logo_1.png",
         dest: "app/web/static/Logo_1.png"
       }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "web/static/default.jpg",
+        dest: "app/web/static/default.jpg"
+      }
     }
   ]
 }
