@@ -550,6 +550,9 @@ def run_model_download(model_id: str):
             }
             print(f"[DOWNLOAD] Successfully downloaded {model_id}")
 
+            # Notify all clients that models changed (so they can auto-select)
+            notify_models_update()
+
             # Update cache with verified sizes
             expected_file_sizes_cache[model_id] = expected_sizes
         else:
@@ -1060,6 +1063,16 @@ def notify_library_update():
     summary = [{"id": g["id"], "status": g.get("status"), "progress": g.get("progress", 0)}
                for g in generations.values()]
     broadcast_event("library", {"generations": summary})
+
+def notify_models_update():
+    """Notify all clients that model status changed (download complete, etc)."""
+    all_models = get_all_models()
+    ready_models = [m for m in all_models if m["status"] == "ready"]
+    broadcast_event("models", {
+        "models": all_models,
+        "ready_models": ready_models,
+        "has_ready_model": len(ready_models) > 0
+    })
 
 # ============================================================================
 # Background Queue Processor

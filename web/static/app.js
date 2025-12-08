@@ -178,6 +178,26 @@ var App = () => {
                     console.error('[SSE] Error parsing library event:', err);
                 }
             });
+
+            // Handle model updates (download complete, etc)
+            eventSource.addEventListener('models', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    console.log('[SSE] Models update received:', data);
+                    if (data.models) {
+                        const all = data.models;
+                        const ready = data.ready_models || all.filter(m => m.status === 'ready');
+                        setAllModels(all);
+                        setModels(ready);
+                        setHasReadyModel(data.has_ready_model);
+                        // Stop download polling if no downloads in progress
+                        const hasDownloading = all.some(m => m.status === 'downloading');
+                        setDownloadPolling(hasDownloading);
+                    }
+                } catch (err) {
+                    console.error('[SSE] Error parsing models event:', err);
+                }
+            });
         };
 
         connectSSE();
@@ -234,12 +254,12 @@ var App = () => {
         timerRef.current && clearInterval(timerRef.current);
     }, []);
 
-    // Poll for model download progress
+    // Poll for model download progress (reduced frequency - SSE handles real-time updates)
     useEffect(() => {
         if (!downloadPolling) return;
         const interval = setInterval(() => {
             loadModels();
-        }, 2000);
+        }, 5000);  // Poll every 5 seconds instead of 2
         return () => clearInterval(interval);
     }, [downloadPolling]);
 
@@ -332,24 +352,39 @@ var App = () => {
     }, [sections]);
 
     // Auto-select best model based on available (free) VRAM
-    // Be conservative - only auto-select larger models if there's plenty of headroom
+    // Priority: prefer larger models if VRAM allows, but ALWAYS pick a ready model
     useEffect(() => {
-        if (!gpuInfo?.gpu?.free_gb || models.length === 0) return;
-        const freeVram = gpuInfo.gpu.free_gb;
-        let bestModel = 'songgeneration_base';
-        // LARGE: needs 22GB high mode, 28GB with ref - require >22GB free
-        // FULL: needs 12GB high mode, 18GB with ref - require >18GB free
-        // NEW/BASE: needs 10GB, 16GB with ref - default choice
-        if (freeVram > 22 && models.some(m => m.id === 'songgeneration_large' && m.status === 'ready')) {
+        if (models.length === 0) return;
+
+        const freeVram = gpuInfo?.gpu?.free_gb || 0;
+        const readyModels = models.filter(m => m.status === 'ready');
+
+        // If no models ready, don't change selection
+        if (readyModels.length === 0) return;
+
+        let bestModel = null;
+
+        // VRAM requirements (conservative estimates for high mode + reference):
+        // LARGE: 22GB+, FULL: 12GB+ (18GB with ref), NEW/BASE: 10GB+ (16GB with ref)
+        // Use lower thresholds since low/auto memory modes can work with less
+        if (freeVram >= 20 && readyModels.some(m => m.id === 'songgeneration_large')) {
             bestModel = 'songgeneration_large';
-        } else if (freeVram > 18 && models.some(m => m.id === 'songgeneration_base_full' && m.status === 'ready')) {
+        } else if (freeVram >= 12 && readyModels.some(m => m.id === 'songgeneration_base_full')) {
             bestModel = 'songgeneration_base_full';
-        } else if (models.some(m => m.id === 'songgeneration_base_new' && m.status === 'ready')) {
+        } else if (readyModels.some(m => m.id === 'songgeneration_base_new')) {
             bestModel = 'songgeneration_base_new';
-        } else if (models.some(m => m.id === 'songgeneration_base' && m.status === 'ready')) {
+        } else if (readyModels.some(m => m.id === 'songgeneration_base')) {
             bestModel = 'songgeneration_base';
         }
-        setSelectedModel(bestModel);
+
+        // Fallback: if no preferred model found, select first ready model
+        if (!bestModel && readyModels.length > 0) {
+            bestModel = readyModels[0].id;
+        }
+
+        if (bestModel) {
+            setSelectedModel(bestModel);
+        }
     }, [gpuInfo, models]);
 
     // Time estimation based on model and lyrics
@@ -738,6 +773,13 @@ var App = () => {
     };
 
     const generate = async () => {
+        // Validate model is ready before generating
+        const modelReady = models.some(m => m.id === selectedModel && m.status === 'ready');
+        if (!modelReady) {
+            setError(`Model "${selectedModel}" is not ready. Please download it first or select a different model.`);
+            return;
+        }
+
         const payload = createPayload();
 
         if (generating) {
