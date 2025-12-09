@@ -876,6 +876,48 @@ def is_model_server_running() -> bool:
     except:
         return False
 
+def kill_process_on_port(port: int) -> bool:
+    """Kill any process using the specified port."""
+    try:
+        if sys.platform == "win32":
+            # Windows: use netstat to find PID, then taskkill
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=10
+            )
+            for line in result.stdout.split('\n'):
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        print(f"[MODEL_SERVER] Killing process {pid} on port {port}", flush=True)
+                        subprocess.run(["taskkill", "/F", "/PID", pid],
+                                      capture_output=True, timeout=10)
+                        time.sleep(2)  # Wait for port to be released
+                        return True
+        else:
+            # Linux/Mac: use lsof or fuser
+            try:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.stdout.strip():
+                    pid = result.stdout.strip().split('\n')[0]
+                    print(f"[MODEL_SERVER] Killing process {pid} on port {port}", flush=True)
+                    subprocess.run(["kill", "-9", pid], capture_output=True, timeout=10)
+                    time.sleep(2)
+                    return True
+            except FileNotFoundError:
+                # lsof not available, try fuser
+                subprocess.run(["fuser", "-k", f"{port}/tcp"],
+                              capture_output=True, timeout=10)
+                time.sleep(2)
+                return True
+    except Exception as e:
+        print(f"[MODEL_SERVER] Failed to kill process on port {port}: {e}", flush=True)
+    return False
+
 def get_model_server_status() -> dict:
     """Get model server status including loaded model info."""
     try:
@@ -1027,6 +1069,10 @@ def start_model_server(preload_model: str = None) -> bool:
         print("[MODEL_SERVER] Already running", flush=True)
         return True
 
+    # Kill any orphaned process on the port before starting
+    # This handles cases where previous server hung/crashed but port is still bound
+    kill_process_on_port(MODEL_SERVER_PORT)
+
     print("[MODEL_SERVER] Starting model server...", flush=True)
 
     # Find Python executable in virtual environment
@@ -1125,7 +1171,7 @@ def generate_via_server(input_jsonl: str, save_dir: str, gen_type: str = "mixed"
                                "input_jsonl": input_jsonl,
                                "save_dir": save_dir,
                                "gen_type": gen_type
-                           }, timeout=600)  # 10 min timeout for generation
+                           }, timeout=1800)  # 30 min timeout for generation (some GPUs are slow)
         return resp.json()
     except Exception as e:
         return {"error": str(e)}
