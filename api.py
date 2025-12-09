@@ -844,7 +844,7 @@ def run_model_download(model_id: str):
             print(f"[DOWNLOAD] Successfully downloaded {model_id}")
 
             # Notify all clients that models changed (so they can auto-select)
-            notify_models_update()
+            notify_models_update_sync()  # Sync version for thread context
 
             # Update cache with verified sizes
             expected_file_sizes_cache[model_id] = expected_sizes
@@ -1121,10 +1121,10 @@ def get_model_warmth(model_id: str) -> str:
 
     return "not_loaded"
 
-def get_all_models() -> List[dict]:
+async def get_all_models() -> List[dict]:
     """Get all models with their current status and warmth"""
-    # Get model server status ONCE (avoid multiple slow HTTP calls)
-    server_status = get_model_server_status()
+    # Get model server status ONCE (async - doesn't block event loop)
+    server_status = await get_model_server_status_async()
 
     models = []
     for model_id, info in MODEL_REGISTRY.items():
@@ -1172,9 +1172,20 @@ def get_all_models() -> List[dict]:
     return models
 
 # Legacy function for compatibility
-def get_available_models() -> List[dict]:
+async def get_available_models() -> List[dict]:
     """Get only ready models (for backwards compatibility)"""
-    return [m for m in get_all_models() if m["status"] == "ready"]
+    all_models = await get_all_models()
+    return [m for m in all_models if m["status"] == "ready"]
+
+def get_available_models_sync() -> List[dict]:
+    """Get only ready models (sync version for startup)"""
+    # Use quick status check only - no model server check at startup
+    models = []
+    for model_id, info in MODEL_REGISTRY.items():
+        status = get_model_status_quick(model_id)
+        if status == "ready":
+            models.append({"id": model_id, "name": info["name"], "status": status})
+    return models
 
 print(f"[CONFIG] Base dir: {BASE_DIR}")
 print(f"[CONFIG] Output dir: {OUTPUT_DIR}")
@@ -1197,7 +1208,7 @@ for model_id in MODEL_REGISTRY.keys():
             # Folder exists but model is incomplete
             print(f"[CONFIG] Found incomplete model folder: {model_id} - will need re-download")
 
-ready_models = get_available_models()
+ready_models = get_available_models_sync()
 print(f"[CONFIG] Available models: {[m['id'] for m in ready_models]}")
 if not ready_models:
     recommended = get_recommended_model()
@@ -1403,7 +1414,7 @@ async def process_queue_item():
             return
 
         # Check if ANY model is ready before processing
-        all_models = get_all_models()
+        all_models = await get_all_models()
         ready_models = [m for m in all_models if m["status"] == "ready"]
         if not ready_models:
             print("[QUEUE-PROC] No models ready - waiting for download to complete", flush=True)
@@ -1632,12 +1643,31 @@ def notify_library_update():
                for g in generations.values()]
     broadcast_event("library", {"generations": summary})
 
-def notify_models_update():
+async def notify_models_update():
     """Notify all clients that model status changed (download complete, etc)."""
-    all_models = get_all_models()
+    all_models = await get_all_models()
     ready_models = [m for m in all_models if m["status"] == "ready"]
     broadcast_event("models", {
         "models": all_models,
+        "ready_models": ready_models,
+        "has_ready_model": len(ready_models) > 0
+    })
+
+def notify_models_update_sync():
+    """Sync version for contexts where async isn't available."""
+    # Use quick status only - skip model server check for notifications
+    models = []
+    for model_id, info in MODEL_REGISTRY.items():
+        status = get_model_status_quick(model_id)
+        models.append({
+            "id": model_id,
+            "name": info["name"],
+            "status": status,
+            "warmth": "not_loaded"  # Can't check server status synchronously
+        })
+    ready_models = [m for m in models if m["status"] == "ready"]
+    broadcast_event("models", {
+        "models": models,
         "ready_models": ready_models,
         "has_ready_model": len(ready_models) > 0
     })
@@ -1815,7 +1845,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
         generations[gen_id]["progress"] = 0
 
         # Notify model status changed (now in use)
-        notify_models_update()
+        await notify_models_update()
 
         # Calculate estimated time from history
         model_id = request.model or DEFAULT_MODEL
@@ -1973,7 +2003,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
             generations[gen_id]["progress"] = 35
             generations[gen_id]["stage"] = "generating"
             notify_generation_update(gen_id, generations[gen_id])
-            notify_models_update()
+            await notify_models_update()
 
             gen_type = request.output_mode or "mixed"
             start_time = time.time()
@@ -2015,7 +2045,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
             generations[gen_id]["duration"] = audio_duration
 
             # Notify model status changed (no longer generating)
-            notify_models_update()
+            await notify_models_update()
 
             # Calculate and save timing
             generation_time_seconds = int(gen_time)
@@ -2072,7 +2102,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
         # Memory mode handling
         memory_mode = request.memory_mode
         if memory_mode == "auto":
-            current_gpu = get_gpu_info()
+            current_gpu = await asyncio.to_thread(get_gpu_info)
             if current_gpu['available'] and current_gpu['can_run_full']:
                 memory_mode = "full"
                 print(f"[GEN {gen_id}] Auto-selected FULL mode ({current_gpu['gpu']['free_gb']}GB free)")
@@ -2306,7 +2336,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
         generations[gen_id]["duration"] = audio_duration
 
         # Notify model status changed (no longer in use)
-        notify_models_update()
+        await notify_models_update()
 
         # Calculate actual generation time
         generation_time_seconds = 0
@@ -2384,7 +2414,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
         # Notify clients of failure
         notify_generation_update(gen_id, generations[gen_id])
         notify_library_update()
-        notify_models_update()  # Model no longer in use
+        await notify_models_update()  # Model no longer in use
 
     # Background queue processor will automatically handle the next item
 
@@ -2408,8 +2438,8 @@ async def root():
 async def health_check():
     """Health check endpoint."""
     global available_models, gpu_info
-    available_models = get_available_models()
-    gpu_info = get_gpu_info()
+    available_models = await get_available_models()
+    gpu_info = await asyncio.to_thread(get_gpu_info)
     return {
         "status": "ok",
         "models": available_models,
@@ -2421,7 +2451,7 @@ async def health_check():
 async def get_gpu_status():
     """Get current GPU status and VRAM."""
     global gpu_info
-    gpu_info = get_gpu_info()
+    gpu_info = await asyncio.to_thread(get_gpu_info)
     return gpu_info
 
 @app.get("/api/timing-stats")
@@ -2436,7 +2466,7 @@ async def get_timing_statistics():
 @app.get("/api/models")
 async def list_models():
     """List all models with their status (ready, downloading, not_downloaded)."""
-    all_models = get_all_models()
+    all_models = await get_all_models()
     ready_models = [m for m in all_models if m["status"] == "ready"]
     recommended = get_recommended_model()
 
@@ -2598,12 +2628,13 @@ async def generate_song(request: SongRequest, background_tasks: BackgroundTasks)
 
     # Validate model exists BEFORE accepting request
     model_id = request.model or DEFAULT_MODEL
-    model_status = get_model_status(model_id)
+    # Use quick status check (no HuggingFace API)
+    model_status = get_model_status_quick(model_id)
 
     # If requested model isn't ready, try to auto-select a ready model
     if model_status != "ready":
         # Get all ready models
-        all_models = get_all_models()
+        all_models = await get_all_models()
         ready_models = [m for m in all_models if m["status"] == "ready"]
 
         if ready_models:
@@ -2705,7 +2736,7 @@ async def stop_generation(gen_id: str):
     # Notify clients
     notify_generation_update(gen_id, generations[gen_id])
     notify_library_update()
-    notify_models_update()  # Model no longer in use
+    await notify_models_update()  # Model no longer in use
 
     return {"status": "stopped", "message": "Generation stop requested"}
 
