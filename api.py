@@ -1084,19 +1084,38 @@ def kill_process_on_port(port: int) -> bool:
     return False
 
 def get_model_server_status() -> dict:
-    """Get model server status including loaded model info (blocking)."""
-    try:
-        resp = requests.get(f"{MODEL_SERVER_URL}/status", timeout=2)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data
-    except requests.exceptions.Timeout:
-        pass  # Server not responding quickly
-    except requests.exceptions.ConnectionError:
-        pass  # Server not running
-    except Exception as e:
-        print(f"[MODEL_SERVER] Status check error: {e}")
-    return {"loaded": False, "running": False}
+    """Get model server status including loaded model info (blocking).
+
+    Uses retry logic for reliability. Returns accurate status or clear failure.
+    """
+    max_retries = 3
+    timeout_seconds = 5
+
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(f"{MODEL_SERVER_URL}/status", timeout=timeout_seconds)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Add running flag based on successful response
+                data["running"] = True
+                return data
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                print(f"[MODEL_SERVER] Status check timeout (attempt {attempt + 1}/{max_retries}), retrying...")
+                time.sleep(0.5)
+            continue
+        except requests.exceptions.ConnectionError:
+            # Server not running - no point retrying
+            return {"loaded": False, "running": False, "error": "not_running"}
+        except Exception as e:
+            print(f"[MODEL_SERVER] Status check error (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(0.5)
+            continue
+
+    # All retries failed
+    print(f"[MODEL_SERVER] Status check failed after {max_retries} attempts")
+    return {"loaded": False, "running": False, "error": "timeout"}
 
 async def get_model_server_status_async() -> dict:
     """Get model server status (non-blocking)."""

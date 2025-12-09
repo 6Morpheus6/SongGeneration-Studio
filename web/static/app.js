@@ -261,6 +261,26 @@ var App = () => {
         timerRef.current && clearInterval(timerRef.current);
     }, []);
 
+    // Refresh model status shortly after initial load to ensure accurate warmth
+    // This handles cases where the model server status check might be slow on first call
+    useEffect(() => {
+        const refreshTimer = setTimeout(() => {
+            console.log('[MODELS] Refreshing model status after initial load...');
+            loadModels();
+            loadGpuInfo();
+        }, 2000);  // Refresh after 2 seconds
+        return () => clearTimeout(refreshTimer);
+    }, []);
+
+    // Periodic model warmth status refresh (every 10 seconds)
+    // Ensures model loaded/not_loaded state is always accurate
+    useEffect(() => {
+        const interval = setInterval(() => {
+            loadModels();
+        }, 10000);  // Refresh every 10 seconds
+        return () => clearInterval(interval);
+    }, []);
+
     // Poll for model download progress (reduced frequency - SSE handles real-time updates)
     useEffect(() => {
         if (!downloadPolling) return;
