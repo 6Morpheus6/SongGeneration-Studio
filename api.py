@@ -525,6 +525,54 @@ def is_model_ready_quick(model_id: str) -> bool:
 
     return False
 
+def get_model_status_quick(model_id: str) -> str:
+    """Fast model status check (no HuggingFace API calls).
+
+    Returns: 'ready', 'downloading', or 'not_downloaded'
+
+    This is optimized for UI display - it uses the verified cache and
+    local file size checks only. For exact verification, use get_model_status().
+    """
+    # Check if currently downloading
+    if model_id in download_states and download_states[model_id].get("status") == "downloading":
+        return "downloading"
+
+    if model_id not in MODEL_REGISTRY:
+        return "not_downloaded"
+
+    folder_path = BASE_DIR / model_id
+    if not folder_path.exists():
+        return "not_downloaded"
+
+    # Fast path: already verified
+    if is_model_verified(model_id):
+        model_file = folder_path / "model.pt"
+        model_file_st = folder_path / "model.safetensors"
+        if model_file.exists() or model_file_st.exists():
+            return "ready"
+
+    # Check for model file with reasonable size (90% of expected)
+    expected_size_gb = MODEL_REGISTRY[model_id]["size_gb"]
+    min_size_bytes = int(expected_size_gb * 0.9 * 1000 * 1000 * 1000)
+
+    model_file = folder_path / "model.pt"
+    if model_file.exists():
+        try:
+            if model_file.stat().st_size >= min_size_bytes:
+                return "ready"
+        except:
+            pass
+
+    model_file_st = folder_path / "model.safetensors"
+    if model_file_st.exists():
+        try:
+            if model_file_st.stat().st_size >= min_size_bytes:
+                return "ready"
+        except:
+            pass
+
+    return "not_downloaded"
+
 def get_repo_file_sizes_from_hf(repo_id: str) -> dict:
     """Get exact file sizes in bytes from HuggingFace API.
 
@@ -944,9 +992,13 @@ def delete_model(model_id: str) -> dict:
         return {"error": f"Failed to delete: {e}"}
 
 def get_recommended_model() -> Optional[str]:
-    """Get the recommended model based on available (free) VRAM, not total."""
+    """Get the recommended model based on available (free) VRAM, not total.
+
+    Uses cached GPU info for speed - GPU info is refreshed separately when needed.
+    """
     global gpu_info
-    gpu_info = get_gpu_info()  # Refresh
+    # Use cached GPU info for speed (don't refresh every time)
+    # GPU info is refreshed on startup and via /api/gpu endpoint
 
     if not gpu_info['available']:
         # No GPU, recommend smallest model
@@ -1068,7 +1120,8 @@ def get_all_models() -> List[dict]:
 
     models = []
     for model_id, info in MODEL_REGISTRY.items():
-        status = get_model_status(model_id)
+        # Use fast status check - no HuggingFace API calls
+        status = get_model_status_quick(model_id)
         # Inline warmth check using cached server_status
         if status == "ready":
             if server_status.get("loading"):
@@ -1126,11 +1179,12 @@ download_processes.clear()
 download_cancel_flags.clear()
 print(f"[CONFIG] Cleared stale download states")
 
-# Clean up partial downloads (folders exist but model file is incomplete/missing)
+# Quick check for partial downloads (fast - no HuggingFace API calls)
 for model_id in MODEL_REGISTRY.keys():
     folder_path = BASE_DIR / model_id
     if folder_path.exists():
-        status = get_model_status(model_id)
+        # Use fast status check on startup
+        status = get_model_status_quick(model_id)
         if status == "not_downloaded":
             # Folder exists but model is incomplete
             print(f"[CONFIG] Found incomplete model folder: {model_id} - will need re-download")
