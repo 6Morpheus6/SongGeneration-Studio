@@ -1721,8 +1721,8 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
                 if "error" in load_result:
                     raise Exception(f"Failed to load model: {load_result['error']}")
 
-                # Wait for model to load (up to 120 seconds)
-                for i in range(120):
+                # Wait for model to load (up to 300 seconds / 5 minutes)
+                for i in range(300):
                     await asyncio.sleep(1)
                     server_status = get_model_server_status()
                     if server_status.get("loaded") and server_status.get("model_id") == model_id:
