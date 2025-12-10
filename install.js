@@ -3,7 +3,16 @@ module.exports = {
     bundle: "ai"
   },
   run: [
-    // 1. Install PyTorch
+    // 1. Download runtime files (creates app/ folder with requirements.txt, codeclm, etc.)
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        _: ["lglg666/SongGeneration-Runtime"],
+        "local-dir": "."
+      }
+    },
+    // 2. Install PyTorch
     {
       method: "script.start",
       params: {
@@ -14,7 +23,7 @@ module.exports = {
         }
       }
     },
-    // 2. Install Python dependencies
+    // 3. Install Python dependencies (requirements.txt now exists from step 1)
     {
       method: "shell.run",
       params: {
@@ -25,15 +34,6 @@ module.exports = {
           "uv pip install -r requirements_nodeps.txt --no-deps",
           "uv pip install fastapi uvicorn python-multipart aiofiles"
         ]
-      }
-    },
-    // 3. Download runtime files (ckpt + third_party) to app/
-    {
-      method: "hf.download",
-      params: {
-        path: "app",
-        _: ["lglg666/SongGeneration-Runtime"],
-        "local-dir": "."
       }
     },
     // 4. Sync custom files from root to app/
