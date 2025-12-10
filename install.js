@@ -3,7 +3,16 @@ module.exports = {
     bundle: "ai"
   },
   run: [
-    // 1. Download runtime files (creates app/ folder with requirements.txt, codeclm, etc.)
+    // 1. Clone the SongGeneration repo (contains codeclm/, requirements.txt, web/, etc.)
+    {
+      method: "shell.run",
+      params: {
+        message: [
+          "git clone https://github.com/tencent-ailab/SongGeneration app"
+        ]
+      }
+    },
+    // 2. Download model weights from HuggingFace (ckpt/, third_party/)
     {
       method: "hf.download",
       params: {
@@ -12,7 +21,7 @@ module.exports = {
         "local-dir": "."
       }
     },
-    // 2. Install PyTorch
+    // 3. Install PyTorch
     {
       method: "script.start",
       params: {
@@ -23,7 +32,7 @@ module.exports = {
         }
       }
     },
-    // 3. Install Python dependencies (requirements.txt now exists from step 1)
+    // 4. Install Python dependencies
     {
       method: "shell.run",
       params: {
@@ -36,7 +45,7 @@ module.exports = {
         ]
       }
     },
-    // 4. Sync custom Python files from root to app/
+    // 5. Sync custom Python files from root to app/
     { method: "fs.copy", params: { src: "main.py", dest: "app/main.py" } },
     { method: "fs.copy", params: { src: "generation.py", dest: "app/generation.py" } },
     { method: "fs.copy", params: { src: "model_server.py", dest: "app/model_server.py" } },
@@ -46,7 +55,7 @@ module.exports = {
     { method: "fs.copy", params: { src: "schemas.py", dest: "app/schemas.py" } },
     { method: "fs.copy", params: { src: "sse.py", dest: "app/sse.py" } },
     { method: "fs.copy", params: { src: "timing.py", dest: "app/timing.py" } },
-    // 5. Sync custom web files from root to app/
+    // 6. Sync custom web files from root to app/
     { method: "fs.copy", params: { src: "web/static/index.html", dest: "app/web/static/index.html" } },
     { method: "fs.copy", params: { src: "web/static/styles.css", dest: "app/web/static/styles.css" } },
     { method: "fs.copy", params: { src: "web/static/app.js", dest: "app/web/static/app.js" } },
@@ -57,7 +66,7 @@ module.exports = {
     { method: "fs.copy", params: { src: "web/static/icons.js", dest: "app/web/static/icons.js" } },
     { method: "fs.copy", params: { src: "web/static/Logo_1.png", dest: "app/web/static/Logo_1.png" } },
     { method: "fs.copy", params: { src: "web/static/default.jpg", dest: "app/web/static/default.jpg" } },
-    // 6. Apply flash attention fix for Windows compatibility
+    // 7. Apply flash attention fix for Windows compatibility
     { method: "fs.copy", params: { src: "patches/builders.py", dest: "app/codeclm/models/builders.py" } }
   ]
 }
