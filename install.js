@@ -42,7 +42,7 @@ module.exports = {
           "uv pip install -r requirements.txt",
           "uv pip install -r requirements_nodeps.txt --no-deps",
           "uv pip install fastapi uvicorn python-multipart aiofiles",
-          "uv pip install transformers==4.37.2 tokenizers==0.15.2 --force-reinstall"
+          "uv pip install transformers==4.37.2 tokenizers==0.15.2 peft==0.10.0 --force-reinstall"
         ]
       }
     },
