@@ -171,8 +171,19 @@ async def process_queue_item():
                 gender=item.get('gender', 'female'),
                 genre=item.get('genre', ''),
                 emotion=item.get('emotion', ''),
+                timbre=item.get('timbre', ''),
+                instruments=item.get('instruments', ''),
+                custom_style=item.get('custom_style'),
+                bpm=item.get('bpm', 120),
                 model=item.get('model', DEFAULT_MODEL),
                 output_mode=item.get('output_mode', 'mixed'),
+                reference_audio_id=item.get('reference_audio_id'),
+                # Advanced generation parameters
+                cfg_coef=item.get('cfg_coef', 1.5),
+                temperature=item.get('temperature', 0.8),
+                top_k=item.get('top_k', 50),
+                top_p=item.get('top_p', 0.0),
+                extend_stride=item.get('extend_stride', 5),
             )
         except Exception as e:
             print(f"[QUEUE-PROC] Error creating request: {e}")
