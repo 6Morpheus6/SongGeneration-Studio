@@ -213,52 +213,98 @@ var useAudioPlayer = (library) => {
 };
 
 // ============ Time Estimation Hook ============
+//
+// Algorithm:
+// 1. Start with model default (Base: 3:00, Base Full: 4:00, Large: 6:00)
+// 2. Add complexity factor based on lyrics length and section count (up to max additional)
+// 3. If we have history, blend the default estimate with learned average using EMA
+// 4. The more history we have, the more we trust the learned values
+//
 var useTimeEstimation = (timingStats) => {
     return useCallback((model, sectionsList, hasReference = false) => {
         const numSections = sectionsList.length;
         const totalLyrics = sectionsList.reduce((acc, s) => acc + (s.lyrics || '').length, 0);
         const hasLyrics = totalLyrics > 0;
 
-        // Try historical data first
+        // Get model defaults
+        const baseTime = MODEL_BASE_TIMES[model] || 180;
+        const maxAdditional = MODEL_MAX_ADDITIONAL[model] || 180;
+
+        // Calculate complexity factor (0 to 1)
+        // Sections: normalized 0-1 based on 1-10 sections
+        const sectionFactor = Math.min(1, Math.max(0, (numSections - 1) / 9));
+        // Lyrics: normalized 0-1 based on 0-2000 characters
+        const lyricsFactor = Math.min(1, totalLyrics / 2000);
+        // Combined complexity (weighted average: lyrics matter more)
+        const complexity = (sectionFactor * 0.4) + (lyricsFactor * 0.6);
+
+        // Calculate default estimate (before learning)
+        let defaultEstimate = baseTime + Math.round(complexity * maxAdditional);
+
+        // Reference audio adds ~30 seconds
+        if (hasReference) {
+            defaultEstimate += 30;
+        }
+
+        // Determine complexity bucket (must match backend logic)
+        const getComplexityBucket = (sections, lyrics) => {
+            const sectionScore = sections <= 3 ? 0 : (sections <= 6 ? 1 : 2);
+            let lyricsScore = 0;
+            if (lyrics > 0 && lyrics <= 500) lyricsScore = 1;
+            else if (lyrics > 500 && lyrics <= 1500) lyricsScore = 2;
+            else if (lyrics > 1500) lyricsScore = 3;
+            const total = sectionScore + lyricsScore;
+            if (total <= 1) return "low";
+            if (total <= 3) return "medium";
+            if (total <= 4) return "high";
+            return "very_high";
+        };
+
+        const bucket = getComplexityBucket(numSections, totalLyrics);
+
+        // If we have history for this model, blend with learned values
         if (timingStats?.has_history && timingStats.models?.[model]) {
             const modelStats = timingStats.models[model];
-            const sectionKey = String(numSections);
-            
-            if (modelStats.by_sections?.[sectionKey]) {
-                let estimate = modelStats.by_sections[sectionKey];
-                if (hasLyrics && modelStats.avg_with_lyrics && modelStats.avg_without_lyrics) {
-                    const ratio = modelStats.avg_with_lyrics / modelStats.avg_without_lyrics;
-                    if (!hasLyrics) estimate = Math.round(estimate / ratio);
-                }
-                if (hasReference && modelStats.avg_with_reference && modelStats.avg_without_reference) {
-                    estimate = Math.round(estimate * (modelStats.avg_with_reference / modelStats.avg_without_reference));
-                }
-                return estimate;
+            const recordCount = modelStats.count || 0;
+
+            // Get learned estimate from matching bucket, or fall back to general average
+            let learnedEstimate = null;
+
+            // Try exact bucket match first
+            if (modelStats.by_bucket?.[bucket]) {
+                learnedEstimate = modelStats.by_bucket[bucket];
+            }
+            // Fall back to lyrics-based average
+            else if (hasLyrics && modelStats.avg_with_lyrics) {
+                learnedEstimate = modelStats.avg_with_lyrics;
+            } else if (!hasLyrics && modelStats.avg_without_lyrics) {
+                learnedEstimate = modelStats.avg_without_lyrics;
+            }
+            // Fall back to general average
+            else if (modelStats.avg_time) {
+                learnedEstimate = modelStats.avg_time;
             }
 
-            let baseEstimate = hasLyrics ? modelStats.avg_with_lyrics : modelStats.avg_without_lyrics;
-            if (!baseEstimate) baseEstimate = modelStats.avg_time;
-            if (baseEstimate) {
-                const multiplier = 1 + ((numSections - 5) * 0.08);
-                let estimate = Math.round(baseEstimate * multiplier);
+            if (learnedEstimate) {
+                // Adjust learned estimate for reference if we have data
                 if (hasReference && modelStats.avg_with_reference && modelStats.avg_without_reference) {
-                    estimate = Math.round(estimate * (modelStats.avg_with_reference / modelStats.avg_without_reference));
+                    const refRatio = modelStats.avg_with_reference / modelStats.avg_without_reference;
+                    learnedEstimate = Math.round(learnedEstimate * refRatio);
                 }
-                return Math.max(60, estimate);
+
+                // Blend default with learned based on confidence (more records = more trust)
+                // After 1 record: 50% learned, after 5 records: 80% learned, after 10+: 95% learned
+                const confidence = Math.min(0.95, 0.5 + (recordCount * 0.09));
+                const blendedEstimate = Math.round(
+                    (learnedEstimate * confidence) + (defaultEstimate * (1 - confidence))
+                );
+
+                return Math.max(60, blendedEstimate);
             }
         }
 
-        // Fallback: static estimation
-        let baseTime = MODEL_BASE_TIMES[model] || 240;
-        const lyricsAdjust = hasLyrics ? Math.floor(totalLyrics / 500) * 30 : -30;
-        const sectionsAdjust = Math.max(0, numSections - 3) * 15;
-        const durationSections = sectionsList.filter(s =>
-            s.type.includes('intro') || s.type.includes('outro') || s.type.includes('inst')
-        ).length;
-        const durationAdjust = durationSections * 20;
-        const refAdjust = hasReference ? 60 : 0;
-
-        return Math.max(60, baseTime + lyricsAdjust + sectionsAdjust + durationAdjust + refAdjust);
+        // No history - use default estimate
+        return Math.max(60, defaultEstimate);
     }, [timingStats]);
 };
 

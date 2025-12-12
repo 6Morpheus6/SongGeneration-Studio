@@ -158,7 +158,8 @@ async def process_queue_item():
             model_id = ready_models[0]["id"]
             item['model'] = model_id
 
-        gen_id = str(uuid.uuid4())[:8]
+        # Use queue item's ID so frontend can match queue items with generations
+        gen_id = item.get("id") or str(uuid.uuid4())[:8]
 
         sections = [Section(type=s.get('type', 'verse'), lyrics=s.get('lyrics'))
                     for s in item.get('sections', [{'type': 'verse'}])]
@@ -950,7 +951,7 @@ async def add_to_queue(payload: dict):
 
     queue = load_queue()
     item = {
-        "id": str(uuid.uuid4()),
+        "id": str(uuid.uuid4())[:8],  # Use 8-char ID (same format as generations)
         "added_at": datetime.now().isoformat(),
         **payload
     }

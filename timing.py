@@ -1,6 +1,13 @@
 """
 SongGeneration Studio - Timing History
 Track generation times for smart estimates.
+
+Algorithm:
+- Each model has a base default time (Base: 3:00, Base Full: 4:00, Large: 6:00)
+- Initial estimate = base + complexity_factor (based on lyrics chars and sections)
+- After each generation, the estimate is gradually updated using exponential moving average
+- More lyrics and sections = higher complexity = higher estimate
+- Records are grouped by "complexity bucket" for better matching
 """
 
 import json
@@ -30,15 +37,51 @@ def save_timing_history(history: list):
         print(f"[TIMING] Error saving timing history: {e}")
 
 
+def get_complexity_bucket(num_sections: int, lyrics_length: int) -> str:
+    """
+    Categorize generation into complexity buckets for better matching.
+    Returns a string key like "low", "medium", "high", "very_high"
+    """
+    # Calculate complexity score
+    # Sections contribute: 0-3 = low, 4-6 = medium, 7+ = high
+    # Lyrics contribute: 0 = none, 1-500 = low, 501-1500 = medium, 1500+ = high
+
+    section_score = 0 if num_sections <= 3 else (1 if num_sections <= 6 else 2)
+
+    if lyrics_length == 0:
+        lyrics_score = 0
+    elif lyrics_length <= 500:
+        lyrics_score = 1
+    elif lyrics_length <= 1500:
+        lyrics_score = 2
+    else:
+        lyrics_score = 3
+
+    total = section_score + lyrics_score
+
+    if total <= 1:
+        return "low"
+    elif total <= 3:
+        return "medium"
+    elif total <= 4:
+        return "high"
+    else:
+        return "very_high"
+
+
 def save_timing_record(metadata: dict):
     """Save a timing record from a completed generation"""
     if metadata.get("generation_time_seconds", 0) <= 0:
         return  # Don't save if no valid timing
 
+    num_sections = metadata.get("num_sections", 0)
+    lyrics_length = metadata.get("total_lyrics_length", 0)
+
     record = {
         "model": metadata.get("model"),
-        "num_sections": metadata.get("num_sections", 0),
-        "total_lyrics_length": metadata.get("total_lyrics_length", 0),
+        "num_sections": num_sections,
+        "total_lyrics_length": lyrics_length,
+        "complexity_bucket": get_complexity_bucket(num_sections, lyrics_length),
         "has_lyrics": metadata.get("has_lyrics", False),
         "output_mode": metadata.get("output_mode", "mixed"),
         "has_reference": bool(metadata.get("reference_audio_id")),
@@ -54,73 +97,95 @@ def save_timing_record(metadata: dict):
         history = history[-MAX_TIMING_RECORDS:]
 
     save_timing_history(history)
-    print(f"[TIMING] Saved record: {record['model']}, {record['num_sections']} sections, {record['generation_time_seconds']}s")
+    print(f"[TIMING] Saved record: {record['model']}, {record['num_sections']} sections, "
+          f"{lyrics_length} chars, bucket={record['complexity_bucket']}, {record['generation_time_seconds']}s")
 
 
 def get_timing_stats() -> dict:
-    """Calculate timing statistics from history for smart estimates"""
+    """
+    Calculate timing statistics from history for smart estimates.
+    Returns per-model stats with complexity bucket averages for gradual learning.
+    """
     history = load_timing_history()
 
     if not history:
         return {"has_history": False, "models": {}}
 
-    # Group by model and calculate stats
+    # Group by model
     model_stats = {}
     for record in history:
         model = record.get("model", "unknown")
         if model not in model_stats:
             model_stats[model] = {
-                "times": [],
-                "with_lyrics": [],
-                "without_lyrics": [],
-                "with_reference": [],
-                "without_reference": [],
-                "by_sections": {},
+                "all_times": [],
+                "by_bucket": {"low": [], "medium": [], "high": [], "very_high": []},
+                "by_lyrics": {"with": [], "without": []},
+                "by_reference": {"with": [], "without": []},
+                # Store raw records for weighted averaging
+                "records": [],
             }
 
         time_sec = record.get("generation_time_seconds", 0)
         if time_sec <= 0:
             continue
 
-        model_stats[model]["times"].append(time_sec)
+        model_stats[model]["all_times"].append(time_sec)
+        model_stats[model]["records"].append(record)
+
+        # Group by complexity bucket
+        bucket = record.get("complexity_bucket", get_complexity_bucket(
+            record.get("num_sections", 0),
+            record.get("total_lyrics_length", 0)
+        ))
+        if bucket in model_stats[model]["by_bucket"]:
+            model_stats[model]["by_bucket"][bucket].append(time_sec)
 
         # Track by lyrics presence
-        if record.get("has_lyrics"):
-            model_stats[model]["with_lyrics"].append(time_sec)
-        else:
-            model_stats[model]["without_lyrics"].append(time_sec)
+        lyrics_key = "with" if record.get("has_lyrics") else "without"
+        model_stats[model]["by_lyrics"][lyrics_key].append(time_sec)
 
         # Track by reference presence
-        if record.get("has_reference"):
-            model_stats[model]["with_reference"].append(time_sec)
-        else:
-            model_stats[model]["without_reference"].append(time_sec)
+        ref_key = "with" if record.get("has_reference") else "without"
+        model_stats[model]["by_reference"][ref_key].append(time_sec)
 
-        # Track by section count
-        sections = record.get("num_sections", 0)
-        sections_key = str(sections)
-        if sections_key not in model_stats[model]["by_sections"]:
-            model_stats[model]["by_sections"][sections_key] = []
-        model_stats[model]["by_sections"][sections_key].append(time_sec)
-
-    # Calculate averages
+    # Calculate statistics with exponential weighting (recent records matter more)
     result = {"has_history": True, "models": {}}
+
     for model, stats in model_stats.items():
-        if not stats["times"]:
+        if not stats["all_times"]:
             continue
 
+        # Calculate weighted average (recent records have more weight)
+        def weighted_avg(times_list, alpha=0.3):
+            """Exponential moving average - recent values weighted more heavily"""
+            if not times_list:
+                return None
+            if len(times_list) == 1:
+                return int(times_list[0])
+
+            # Start with oldest, apply EMA
+            ema = times_list[0]
+            for t in times_list[1:]:
+                ema = alpha * t + (1 - alpha) * ema
+            return int(ema)
+
         result["models"][model] = {
-            "avg_time": int(sum(stats["times"]) / len(stats["times"])),
-            "min_time": min(stats["times"]),
-            "max_time": max(stats["times"]),
-            "count": len(stats["times"]),
-            "avg_with_lyrics": int(sum(stats["with_lyrics"]) / len(stats["with_lyrics"])) if stats["with_lyrics"] else None,
-            "avg_without_lyrics": int(sum(stats["without_lyrics"]) / len(stats["without_lyrics"])) if stats["without_lyrics"] else None,
-            "avg_with_reference": int(sum(stats["with_reference"]) / len(stats["with_reference"])) if stats["with_reference"] else None,
-            "avg_without_reference": int(sum(stats["without_reference"]) / len(stats["without_reference"])) if stats["without_reference"] else None,
-            "by_sections": {
-                k: int(sum(v) / len(v)) for k, v in stats["by_sections"].items() if v
+            "count": len(stats["all_times"]),
+            "avg_time": weighted_avg(stats["all_times"]),
+            "min_time": min(stats["all_times"]),
+            "max_time": max(stats["all_times"]),
+            # Complexity bucket averages (EMA weighted)
+            "by_bucket": {
+                bucket: weighted_avg(times)
+                for bucket, times in stats["by_bucket"].items()
+                if times
             },
+            # Lyrics impact
+            "avg_with_lyrics": weighted_avg(stats["by_lyrics"]["with"]),
+            "avg_without_lyrics": weighted_avg(stats["by_lyrics"]["without"]),
+            # Reference impact
+            "avg_with_reference": weighted_avg(stats["by_reference"]["with"]),
+            "avg_without_reference": weighted_avg(stats["by_reference"]["without"]),
         }
 
     return result

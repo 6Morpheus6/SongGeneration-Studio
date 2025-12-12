@@ -14,8 +14,7 @@ var App = () => {
     const [customStyle, setCustomStyle] = useState('');
     const [bpm, setBpm] = useState(120);
     const [outputMode, setOutputMode] = useState('mixed');
-    const [memoryMode, setMemoryMode] = useState('auto');
-    
+
     // Advanced settings
     const [cfgCoef, setCfgCoef] = useState(1.5);
     const [temperature, setTemperature] = useState(0.8);
@@ -57,6 +56,9 @@ var App = () => {
     const pollRef = useRef(null);
     const timerRef = useRef(null);
     const addBtnRef = useRef(null);
+    const queueRef = useRef(queue);  // Track queue for cleanup transitions
+    const cleanupRef = useRef(null);  // Ref to hold cleanup function for stable access
+    const transitionLockRef = useRef(false);  // Prevent restore effect during transitions
 
     // Custom hooks
     const modelState = useModels();
@@ -97,6 +99,9 @@ var App = () => {
 
     // Background sync ref
     const bgSyncRef = useRef(null);
+
+    // Keep queueRef in sync with queue state (for use in cleanup without stale closures)
+    useEffect(() => { queueRef.current = queue; }, [queue]);
 
     // Cleanup on unmount
     useEffect(() => () => {
@@ -146,44 +151,75 @@ var App = () => {
 
     // Restore running generation on page load or when queue item starts
     useEffect(() => {
-        // Skip if already tracking a generation
-        if (currentGenId) return;
+        console.log('[RESTORE-EFFECT] Triggered - currentGenId:', currentGenId, 'generating:', generating, 'library count:', library.length, 'transitionLock:', transitionLockRef.current);
 
-        const runningGen = library.find(item => ['generating', 'processing', 'pending'].includes(item.status));
-        if (!runningGen) return;
-
-        // Skip if we're in the middle of cleanup (generating might be stale true)
-        if (generating && !currentGenId) {
-            // State is transitioning - wait for next render
+        // Skip if transition is in progress (cleanupGeneration handles this)
+        if (transitionLockRef.current) {
+            console.log('[RESTORE-EFFECT] Skipping - transition lock active');
             return;
         }
 
-        console.log('[RESTORE] Found running generation:', runningGen.id, runningGen.status);
+        // Skip if already tracking a generation
+        if (currentGenId) {
+            console.log('[RESTORE-EFFECT] Skipping - already tracking:', currentGenId);
+            return;
+        }
+
+        const runningGen = library.find(item => ['generating', 'processing', 'pending'].includes(item.status));
+        console.log('[RESTORE-EFFECT] Looking for running gen in library:', runningGen ? `Found ${runningGen.id} (${runningGen.status})` : 'None found');
+
+        if (!runningGen) {
+            console.log('[RESTORE-EFFECT] No running generation in library, exiting');
+            return;
+        }
+
+        // Note: We no longer skip on `generating && !currentGenId` because that's now
+        // our transitional state showing "Starting next song..." - we want to proceed
+        // and update with the actual generation data
+
+        console.log('[RESTORE-EFFECT] === SETTING UP TRACKING ===');
+        console.log('[RESTORE-EFFECT] Generation ID:', runningGen.id);
+        console.log('[RESTORE-EFFECT] Status:', runningGen.status);
+        console.log('[RESTORE-EFFECT] Elapsed seconds:', runningGen.elapsed_seconds);
+        console.log('[RESTORE-EFFECT] Title:', runningGen.title);
 
         const meta = runningGen.metadata || {};
         const payload = { title: meta.title || runningGen.title || 'Untitled', model: meta.model || 'songgeneration_base', sections: meta.sections || 5, ...meta };
 
+        console.log('[RESTORE-EFFECT] Setting state: generating=true, currentGenId=' + runningGen.id);
         setGenerating(true);
         setCurrentGenId(runningGen.id);
         setCurrentGenPayload(payload);
-        setStatus(runningGen.message || 'Generating...');
+        setStatus(runningGen.message || (runningGen.status === 'pending' ? 'Starting...' : 'Generating...'));
         setProgress(runningGen.progress || 0);
-        setElapsedTime(typeof runningGen.elapsed_seconds === 'number' ? runningGen.elapsed_seconds : 0);
+
+        // Only set elapsed time and start timer if generation has actually started (not pending)
+        const hasStarted = runningGen.status !== 'pending' && typeof runningGen.elapsed_seconds === 'number';
+        console.log('[RESTORE-EFFECT] hasStarted:', hasStarted, '- Setting elapsedTime:', hasStarted ? runningGen.elapsed_seconds : 0);
+        setElapsedTime(hasStarted ? runningGen.elapsed_seconds : 0);
         setEstimatedTime(estimateTime(payload.model, Array.isArray(payload.sections) ? payload.sections : [], Boolean(payload.reference_audio_id)));
 
         // Clear any existing intervals before setting new ones
+        console.log('[RESTORE-EFFECT] Clearing existing intervals - timerRef:', !!timerRef.current, 'pollRef:', !!pollRef.current);
         if (timerRef.current) clearInterval(timerRef.current);
         if (pollRef.current) clearInterval(pollRef.current);
 
         const genId = runningGen.id;
-        timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+        // Only start elapsed time counter if generation has actually started
+        if (hasStarted) {
+            console.log('[RESTORE-EFFECT] Starting elapsed time counter');
+            timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+        }
+
         // Poll function will be called via closure - capture genId explicitly
+        console.log('[RESTORE-EFFECT] Starting 2-second status poll for:', genId);
         pollRef.current = setInterval(async () => {
             try {
+                console.log('[RESTORE-POLL] Fetching status for:', genId);
                 const d = await fetchGeneration(genId);
                 if (!d) {
                     // Generation not found (404) - clean up stale state
-                    console.log('[RESTORE-POLL] Generation not found, cleaning up:', genId);
+                    console.log('[RESTORE-POLL] Generation not found (404), cleaning up:', genId);
                     clearInterval(pollRef.current);
                     clearInterval(timerRef.current);
                     pollRef.current = null;
@@ -196,12 +232,85 @@ var App = () => {
                     await Promise.all([loadLibrary(), loadQueue()]);
                     return;
                 }
+                console.log('[RESTORE-POLL] Status:', d.status, 'Progress:', d.progress, 'Elapsed:', d.elapsed_seconds);
                 setProgress(d.progress);
                 setStatus(d.message);
-                if (typeof d.elapsed_seconds === 'number') setElapsedTime(d.elapsed_seconds);
+                // Only update elapsed time and start timer if generation has actually started
+                if (d.status !== 'pending' && typeof d.elapsed_seconds === 'number') {
+                    setElapsedTime(d.elapsed_seconds);
+                    // Start timer if not already running
+                    if (!timerRef.current) {
+                        console.log('[RESTORE-POLL] Starting timer (was not running)');
+                        timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+                    }
+                }
                 if (['completed', 'failed', 'stopped'].includes(d.status)) {
+                    console.log('[RESTORE-POLL] === GENERATION FINISHED ===');
+                    console.log('[RESTORE-POLL] Final status:', d.status);
                     if (d.status === 'failed') setError(d.message);
-                    // Trigger cleanup by loading fresh library
+                    // Call cleanup via ref to ensure queue transitions work properly
+                    console.log('[RESTORE-POLL] Calling cleanupGeneration via cleanupRef...');
+                    if (cleanupRef.current) {
+                        cleanupRef.current();
+                    } else {
+                        console.error('[RESTORE-POLL] cleanupRef.current is null!');
+                        // Fallback: minimal cleanup
+                        clearInterval(pollRef.current);
+                        clearInterval(timerRef.current);
+                        pollRef.current = null;
+                        timerRef.current = null;
+                        setCurrentGenId(null);
+                        setCurrentGenPayload(null);
+                        setGenerating(false);
+                    }
+                }
+            } catch (e) { console.error('[RESTORE-POLL] Error:', e); }
+        }, 2000);
+        console.log('[RESTORE-EFFECT] === TRACKING SETUP COMPLETE ===');
+    }, [library, currentGenId, estimateTime]);
+
+    // Helper to set up tracking for a generation (used by cleanup and restore effect)
+    const setupGenerationTracking = useCallback(async (gen, freshLibrary) => {
+        console.log('[SETUP-TRACKING] === SETTING UP TRACKING FOR:', gen.id, '===');
+
+        const meta = gen.metadata || {};
+        const payload = {
+            title: meta.title || gen.title || 'Untitled',
+            model: meta.model || 'songgeneration_base',
+            sections: meta.sections || 5,
+            ...meta
+        };
+
+        // Fetch fresh queue to ensure queue item is removed (backend removes it when starting)
+        const freshQueue = await fetchQueue();
+
+        // Set all state in one batch - library AND queue together
+        setLibrary(freshLibrary);
+        setQueue(freshQueue);
+        setCurrentGenId(gen.id);
+        setCurrentGenPayload(payload);
+        setStatus(gen.message || (gen.status === 'pending' ? 'Starting...' : 'Generating...'));
+        setProgress(gen.progress || 0);
+
+        const hasStarted = gen.status !== 'pending' && typeof gen.elapsed_seconds === 'number';
+        setElapsedTime(hasStarted ? gen.elapsed_seconds : 0);
+        setEstimatedTime(estimateTime(payload.model, Array.isArray(payload.sections) ? payload.sections : [], Boolean(payload.reference_audio_id)));
+
+        // Start timer if generation has started
+        if (hasStarted && !timerRef.current) {
+            console.log('[SETUP-TRACKING] Starting elapsed time counter');
+            timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+        }
+
+        // Start polling for this generation
+        const genId = gen.id;
+        console.log('[SETUP-TRACKING] Starting 2-second poll for:', genId);
+        pollRef.current = setInterval(async () => {
+            try {
+                console.log('[CLEANUP-POLL] Fetching status for:', genId);
+                const d = await fetchGeneration(genId);
+                if (!d) {
+                    console.log('[CLEANUP-POLL] Generation not found (404), cleaning up');
                     clearInterval(pollRef.current);
                     clearInterval(timerRef.current);
                     pollRef.current = null;
@@ -211,72 +320,228 @@ var App = () => {
                     setEstimatedTime(null);
                     setElapsedTime(0);
                     setGenerating(false);
-                    // Also refresh GPU info and models since VRAM is now free
-                    await Promise.all([loadLibrary(), loadQueue(), loadTimingStats(), loadGpuInfo()]);
-                    modelState.loadModels();
+                    transitionLockRef.current = false;
+                    await Promise.all([loadLibrary(), loadQueue()]);
+                    return;
                 }
-            } catch (e) { console.error('[RESTORE-POLL]', e); }
+                console.log('[CLEANUP-POLL] Status:', d.status, 'Progress:', d.progress, 'Elapsed:', d.elapsed_seconds);
+                setProgress(d.progress);
+                setStatus(d.message);
+                if (d.status !== 'pending' && typeof d.elapsed_seconds === 'number') {
+                    setElapsedTime(d.elapsed_seconds);
+                    if (!timerRef.current) {
+                        console.log('[CLEANUP-POLL] Starting timer (was not running)');
+                        timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+                    }
+                }
+                if (['completed', 'failed', 'stopped'].includes(d.status)) {
+                    console.log('[CLEANUP-POLL] === GENERATION FINISHED ===');
+                    if (d.status === 'failed') setError(d.message);
+                    if (cleanupRef.current) {
+                        cleanupRef.current();
+                    }
+                }
+            } catch (e) {
+                console.error('[CLEANUP-POLL] Error:', e);
+            }
         }, 2000);
-    }, [library, currentGenId, estimateTime]);
+
+        console.log('[SETUP-TRACKING] === TRACKING SETUP COMPLETE ===');
+    }, [estimateTime]);
 
     const cleanupGeneration = useCallback(async () => {
+        console.log('[CLEANUP] === CLEANUP GENERATION CALLED ===');
+
+        // Set transition lock IMMEDIATELY to prevent restore effect interference
+        transitionLockRef.current = true;
+        console.log('[CLEANUP] Transition lock SET');
+
+        console.log('[CLEANUP] Clearing intervals - pollRef:', !!pollRef.current, 'timerRef:', !!timerRef.current);
         clearInterval(pollRef.current);
         clearInterval(timerRef.current);
         pollRef.current = null;
         timerRef.current = null;
+
+        // Check if there are queued items BEFORE we load fresh data
+        const currentQueue = queueRef.current;
+        const hadQueuedItems = currentQueue && currentQueue.length > 0;
+        console.log('[CLEANUP] Queue state - items:', currentQueue?.length || 0, 'hadQueuedItems:', hadQueuedItems);
+
+        // Clear generation state - but keep generating=true if we have queue items
+        console.log('[CLEANUP] Clearing generation state');
         setCurrentGenId(null);
         setCurrentGenPayload(null);
         setEstimatedTime(null);
         setElapsedTime(0);
-        setGenerating(false);
-        // Load fresh data - if queue has items, background sync will detect new running generation
-        // Also refresh GPU info and models since VRAM is now free
-        await Promise.all([loadLibrary(), loadQueue(), loadTimingStats(), loadGpuInfo()]);
-        modelState.loadModels();  // Refresh model selection based on new VRAM
-    }, []);
+        setProgress(0);
+        setStatus('');
+
+        if (!hadQueuedItems) {
+            console.log('[CLEANUP] No queued items - setting generating=false');
+            setGenerating(false);
+            transitionLockRef.current = false;
+            console.log('[CLEANUP] Transition lock CLEARED (no queue)');
+
+            // Load fresh data
+            await Promise.all([loadLibrary(), loadQueue(), loadTimingStats(), loadGpuInfo()]);
+            modelState.loadModels();
+            console.log('[CLEANUP] === CLEANUP COMPLETE (no queue) ===');
+            return;
+        }
+
+        console.log('[CLEANUP] Queue has items - looking for next generation...');
+
+        // Fetch fresh library to find next generation
+        const freshLib = await fetchLibrary();
+        const nextGen = freshLib.find(item => ['generating', 'processing', 'pending'].includes(item.status));
+
+        if (nextGen) {
+            // Found next generation - set up tracking DIRECTLY (not via restore effect)
+            console.log('[CLEANUP] Found next gen:', nextGen.id, nextGen.status, '- setting up tracking directly');
+            try {
+                await setupGenerationTracking(nextGen, freshLib);
+            } catch (e) {
+                console.error('[CLEANUP] Error in setupGenerationTracking:', e);
+                // On error, fall back to clean state
+                setGenerating(false);
+                await Promise.all([loadLibrary(), loadQueue()]);
+            }
+
+            // Load other data in background
+            loadTimingStats();
+            loadGpuInfo();
+            modelState.loadModels();
+
+            // Clear lock AFTER all state is set (always clear, even on error)
+            transitionLockRef.current = false;
+            console.log('[CLEANUP] Transition lock CLEARED (next gen found)');
+        } else {
+            // Backend hasn't started next gen yet - poll until it does
+            console.log('[CLEANUP] Next gen not in library yet, starting transition poll');
+
+            // Update library state now (to show "Starting next song...")
+            setLibrary(freshLib);
+
+            pollRef.current = setInterval(async () => {
+                try {
+                    console.log('[TRANSITION-POLL] Checking for next generation...');
+                    const lib = await fetchLibrary();
+                    const running = lib.find(item => ['generating', 'processing', 'pending'].includes(item.status));
+
+                    if (running) {
+                        console.log('[TRANSITION-POLL] Found next gen:', running.id, running.status);
+                        clearInterval(pollRef.current);
+                        pollRef.current = null;
+
+                        // Set up tracking DIRECTLY - await to ensure state is set before clearing lock
+                        try {
+                            await setupGenerationTracking(running, lib);
+                        } catch (e) {
+                            console.error('[TRANSITION-POLL] Error in setupGenerationTracking:', e);
+                            // On error, fall back to clean state
+                            setGenerating(false);
+                            setLibrary(lib);
+                            await loadQueue();
+                        }
+
+                        // Clear lock after state is set (always clear, even on error)
+                        transitionLockRef.current = false;
+                        console.log('[TRANSITION-POLL] Transition lock CLEARED');
+                    } else {
+                        // Check if queue is now empty
+                        const q = await fetchQueue();
+                        console.log('[TRANSITION-POLL] No running gen, queue length:', q.length);
+                        if (q.length === 0) {
+                            console.log('[TRANSITION-POLL] Queue empty - clearing generating state');
+                            clearInterval(pollRef.current);
+                            pollRef.current = null;
+                            setGenerating(false);
+                            setLibrary(lib);
+                            setQueue(q);
+                            transitionLockRef.current = false;
+                            console.log('[TRANSITION-POLL] Transition lock CLEARED (queue empty)');
+                        }
+                    }
+                } catch (e) {
+                    console.error('[TRANSITION-POLL] Error:', e);
+                }
+            }, 1000);
+        }
+
+        console.log('[CLEANUP] === CLEANUP COMPLETE ===');
+    }, [setupGenerationTracking]);
 
     const poll = useCallback(async (id) => {
         try {
+            console.log('[POLL] Fetching status for:', id);
             const d = await fetchGeneration(id);
-            if (!d) { cleanupGeneration(); return; }
+            if (!d) {
+                console.log('[POLL] Generation not found (404), calling cleanup');
+                cleanupGeneration();
+                return;
+            }
+            console.log('[POLL] Status:', d.status, 'Progress:', d.progress, 'Elapsed:', d.elapsed_seconds, 'Message:', d.message);
             setProgress(d.progress);
             setStatus(d.message);
             if (typeof d.elapsed_seconds === 'number') setElapsedTime(d.elapsed_seconds);
             if (['completed', 'failed', 'stopped'].includes(d.status)) {
+                console.log('[POLL] === GENERATION FINISHED ===');
+                console.log('[POLL] Final status:', d.status);
                 if (d.status === 'failed') setError(d.message);
+                console.log('[POLL] Calling cleanupGeneration...');
                 cleanupGeneration();
             }
-        } catch (e) { console.error(e); }
+        } catch (e) { console.error('[POLL] Error:', e); }
     }, [cleanupGeneration]);
+
+    // Keep cleanupRef in sync with cleanupGeneration (for use in restore effect without stale closures)
+    useEffect(() => { cleanupRef.current = cleanupGeneration; }, [cleanupGeneration]);
 
     const createPayload = () => ({
         title, sections: sections.map(s => ({ type: s.type, lyrics: s.lyrics || null })),
         gender, genre: genres.join(', '), emotion: moods.join(', '), timbre: timbres.join(', '),
         instruments: instruments.join(', '), custom_style: customStyle, bpm, output_mode: outputMode,
-        model: modelState.selectedModel, memory_mode: memoryMode, reference_audio_id: useReference ? refId : null,
+        model: modelState.selectedModel, reference_audio_id: useReference ? refId : null,
         cfg_coef: cfgCoef, temperature, top_k: topK, top_p: topP, extend_stride: extendStride,
     });
 
     const doStartGeneration = async (payload) => {
+        console.log('[START-GEN] === STARTING NEW GENERATION ===');
+        console.log('[START-GEN] Title:', payload.title);
+        console.log('[START-GEN] Model:', payload.model);
+        console.log('[START-GEN] Sections:', payload.sections?.length);
         setProgress(0); setStatus('Starting...'); setError(null);
         setCurrentGenPayload(payload);
         setEstimatedTime(estimateTime(payload.model, payload.sections, Boolean(payload.reference_audio_id)));
         setElapsedTime(0);
+        console.log('[START-GEN] Starting elapsed time counter');
         timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
         try {
+            console.log('[START-GEN] Calling API to start generation...');
             const { generation_id } = await startGeneration(payload);
+            console.log('[START-GEN] API returned generation_id:', generation_id);
             setCurrentGenId(generation_id);
+            console.log('[START-GEN] Starting 2-second poll for:', generation_id);
             pollRef.current = setInterval(() => poll(generation_id), 2000);
+            console.log('[START-GEN] === GENERATION STARTED ===');
         } catch (e) {
+            console.error('[START-GEN] Error starting generation:', e.message);
             setGenerating(false); setCurrentGenId(null); setCurrentGenPayload(null);
             clearInterval(timerRef.current);
-            if (e.message.includes('409') || e.message.includes('already in progress')) loadLibrary();
+            if (e.message.includes('409') || e.message.includes('already in progress')) {
+                console.log('[START-GEN] Generation already in progress, loading library');
+                loadLibrary();
+            }
             else setError(e.message);
         }
     };
 
     const generate = async () => {
+        console.log('[GENERATE] Generate button clicked');
+        console.log('[GENERATE] hasReadyModel:', modelState.hasReadyModel, 'models count:', modelState.models.length);
+        console.log('[GENERATE] Currently generating:', generating);
         if (!modelState.hasReadyModel || modelState.models.length === 0) {
+            console.log('[GENERATE] No ready models, showing error');
             setError("No models downloaded. Please download a model first."); return;
         }
         let modelToUse = modelState.selectedModel;
@@ -286,8 +551,18 @@ var App = () => {
             else { setError("No models ready."); return; }
         }
         const payload = { ...createPayload(), model: modelToUse };
-        if (generating) { await addToQueue(payload); await loadQueue(); }
-        else { setGenerating(true); doStartGeneration(payload); }
+        console.log('[GENERATE] Payload created with title:', payload.title, 'model:', modelToUse);
+        if (generating) {
+            console.log('[GENERATE] Already generating, adding to queue...');
+            await addToQueue(payload);
+            await loadQueue();
+            console.log('[GENERATE] Added to queue');
+        }
+        else {
+            console.log('[GENERATE] Not generating, starting new generation');
+            setGenerating(true);
+            doStartGeneration(payload);
+        }
     };
 
     const doStopGeneration = async (genId = null) => {
@@ -528,6 +803,58 @@ var App = () => {
                                 </div>
                             </Card>
 
+                            {/* Advanced Settings */}
+                            <Card>
+                                <div onClick={() => setShowAdvanced(!showAdvanced)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: showAdvanced ? '14px' : '0' }}>
+                                    <span style={{ fontSize: '13px', fontWeight: '500', color: '#888' }}>Advanced Settings</span>
+                                    <ChevronIcon size={16} color="#666" rotated={showAdvanced} />
+                                </div>
+                                {showAdvanced && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                <span style={{ fontSize: '12px', color: '#888' }}>Style Strength</span>
+                                                <span style={{ fontSize: '12px', color: '#10B981', fontWeight: '500' }}>{cfgCoef}</span>
+                                            </div>
+                                            <input type="range" min="0" max="5" step="0.1" value={cfgCoef} onChange={e => setCfgCoef(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                                            <div style={{ fontSize: '10px', color: '#555', marginTop: '2px' }}>Higher = follows your style more strictly</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                <span style={{ fontSize: '12px', color: '#888' }}>Creativity</span>
+                                                <span style={{ fontSize: '12px', color: '#10B981', fontWeight: '500' }}>{temperature}</span>
+                                            </div>
+                                            <input type="range" min="0" max="2" step="0.1" value={temperature} onChange={e => setTemperature(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                                            <div style={{ fontSize: '10px', color: '#555', marginTop: '2px' }}>Higher = more experimental</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                <span style={{ fontSize: '12px', color: '#888' }}>Variety</span>
+                                                <span style={{ fontSize: '12px', color: '#10B981', fontWeight: '500' }}>{topK}</span>
+                                            </div>
+                                            <input type="range" min="1" max="100" step="1" value={topK} onChange={e => setTopK(parseInt(e.target.value))} style={{ width: '100%' }} />
+                                            <div style={{ fontSize: '10px', color: '#555', marginTop: '2px' }}>Musical choices per step</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                <span style={{ fontSize: '12px', color: '#888' }}>Focus (Top-P)</span>
+                                                <span style={{ fontSize: '12px', color: '#10B981', fontWeight: '500' }}>{topP}</span>
+                                            </div>
+                                            <input type="range" min="0" max="1" step="0.1" value={topP} onChange={e => setTopP(parseFloat(e.target.value))} style={{ width: '100%' }} />
+                                            <div style={{ fontSize: '10px', color: '#555', marginTop: '2px' }}>0=off, else limits choices by probability</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                <span style={{ fontSize: '12px', color: '#888' }}>Extend Stride</span>
+                                                <span style={{ fontSize: '12px', color: '#10B981', fontWeight: '500' }}>{extendStride}</span>
+                                            </div>
+                                            <input type="range" min="1" max="10" step="1" value={extendStride} onChange={e => setExtendStride(parseInt(e.target.value))} style={{ width: '100%' }} />
+                                            <div style={{ fontSize: '10px', color: '#555', marginTop: '2px' }}>Overlap for longer songs (helps transitions)</div>
+                                        </div>
+                                    </div>
+                                )}
+                            </Card>
+
                             {/* Song Title */}
                             <Card><CardTitle>Song Title</CardTitle><input type="text" className="input-base" value={title} onChange={e => setTitle(e.target.value)} placeholder="Enter song title..." style={{ fontSize: '14px' }} /></Card>
 
@@ -588,22 +915,35 @@ var App = () => {
                                         <div style={{ color: '#555', fontSize: '12px', textAlign: 'center', padding: '20px 0' }}>No activity yet</div>
                                     ) : (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingBottom: '80px' }}>
-                                            {queue.slice().reverse().map((item, idx) => (
-                                                <div key={`q-${item.id}`} className="activity-item" style={{ display: 'flex', gap: '10px', alignItems: 'center', position: 'relative' }}>
-                                                    <button onClick={() => removeFromQueue(item.id).then(loadQueue)} style={{ position: 'absolute', top: '4px', right: '4px', background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}><CloseIcon size={10} /></button>
-                                                    <div style={{ width: '44px', height: '44px', borderRadius: '6px', backgroundColor: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '16px', fontWeight: '600' }}>{idx + 1}</div>
-                                                    <div style={{ flex: 1 }}><div className="text-sm font-medium text-primary truncate">{item.title || 'Untitled'}</div><div className="text-xs text-muted">In queue</div></div>
-                                                </div>
-                                            ))}
-                                            {currentGenPayload && (
+                                            {/* Filter queue to exclude items that are already generating (race condition fix) */}
+                                            {(() => {
+                                                const generatingIds = new Set(
+                                                    library.filter(item => ['generating', 'processing', 'pending'].includes(item.status)).map(item => item.id)
+                                                );
+                                                if (currentGenId) generatingIds.add(currentGenId);
+                                                const filteredQueue = queue.filter(item => !generatingIds.has(item.id));
+                                                return filteredQueue.slice().reverse().map((item, idx) => (
+                                                    <div key={`q-${item.id}`} className="activity-item" style={{ display: 'flex', gap: '10px', alignItems: 'center', position: 'relative' }}>
+                                                        <button onClick={() => removeFromQueue(item.id).then(loadQueue)} style={{ position: 'absolute', top: '4px', right: '4px', background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}><CloseIcon size={10} /></button>
+                                                        <div style={{ width: '44px', height: '44px', borderRadius: '6px', backgroundColor: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '16px', fontWeight: '600' }}>{filteredQueue.length - idx}</div>
+                                                        <div style={{ flex: 1 }}><div className="text-sm font-medium text-primary truncate">{item.title || 'Untitled'}</div><div className="text-xs text-muted">In queue</div></div>
+                                                    </div>
+                                                ));
+                                            })()}
+                                            {currentGenPayload ? (
                                                 <div className="activity-item processing" style={{ display: 'flex', gap: '10px', alignItems: 'center', position: 'relative', overflow: 'hidden' }}>
-                                                    <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: estimatedTime > 0 ? `${Math.min((elapsedTime / estimatedTime) * 100, 100)}%` : '30%', background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(245, 158, 11, 0.05) 100%)', zIndex: 0 }} />
+                                                    <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: estimatedTime > 0 && elapsedTime > 0 ? `${Math.min((elapsedTime / estimatedTime) * 100, 100)}%` : '0%', background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(245, 158, 11, 0.05) 100%)', zIndex: 0, transition: 'width 0.5s ease' }} />
                                                     <button onClick={() => doStopGeneration()} style={{ position: 'absolute', top: '4px', right: '4px', background: 'none', border: 'none', color: '#666', cursor: 'pointer', zIndex: 2 }}><CloseIcon size={10} /></button>
                                                     <div style={{ width: '44px', height: '44px', borderRadius: '6px', backgroundColor: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}><SpinnerIcon size={18} /></div>
-                                                    <div style={{ flex: 1, zIndex: 1 }}><div className="text-sm font-medium text-primary truncate">{currentGenPayload.title || 'Untitled'}</div><div className="text-xs text-secondary">{formatTime(elapsedTime)}{estimatedTime > 0 ? ` / ~${formatTime(estimatedTime)}` : ''}</div></div>
+                                                    <div style={{ flex: 1, zIndex: 1 }}><div className="text-sm font-medium text-primary truncate">{currentGenPayload.title || 'Untitled'}</div><div className="text-xs text-secondary">{elapsedTime > 0 ? `${formatTime(elapsedTime)}${estimatedTime > 0 ? ` / ~${formatTime(estimatedTime)}` : ''}` : status || 'Starting...'}</div></div>
+                                                </div>
+                                            ) : generating && queue.length > 0 && (
+                                                <div className="activity-item processing" style={{ display: 'flex', gap: '10px', alignItems: 'center', position: 'relative', overflow: 'hidden' }}>
+                                                    <div style={{ width: '44px', height: '44px', borderRadius: '6px', backgroundColor: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><SpinnerIcon size={18} /></div>
+                                                    <div style={{ flex: 1 }}><div className="text-sm font-medium text-primary truncate">Starting next song...</div><div className="text-xs text-secondary">Please wait</div></div>
                                                 </div>
                                             )}
-                                            {library.filter(item => item.id !== currentGenId).map(item => <SongsPanelItem key={item.id} item={item} audioPlayer={audioPlayer} onDelete={() => deleteGeneration(item.id).then(loadLibrary)} />)}
+                                            {library.filter(item => item.id !== currentGenId && !['generating', 'processing', 'pending'].includes(item.status)).map(item => <SongsPanelItem key={item.id} item={item} audioPlayer={audioPlayer} onDelete={() => deleteGeneration(item.id).then(loadLibrary)} />)}
                                         </div>
                                     )}
                                 </div>
@@ -623,9 +963,23 @@ var App = () => {
                             <div style={{ textAlign: 'center', padding: '60px', color: '#666' }}>No songs generated yet. Start creating!</div>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                {queue.slice().reverse().map((item, idx) => <LibraryItem key={`queue-${item.id}`} item={item} isQueued queuePosition={queue.length - idx} onRemoveFromQueue={() => removeFromQueue(item.id).then(loadQueue)} />)}
-                                {currentGenPayload && <LibraryItem item={currentGenPayload} isGenerating onStop={doStopGeneration} status={status} elapsedTime={elapsedTime} estimatedTime={estimatedTime} />}
-                                {library.filter(item => item.id !== currentGenId).map(item => <LibraryItem key={item.id} item={item} onDelete={() => deleteGeneration(item.id).then(loadLibrary)} onPlay={audioPlayer.play} onUpdate={loadLibrary} onStop={() => doStopGeneration(item.id)} isCurrentlyPlaying={audioPlayer.playingId === item.id} isAudioPlaying={audioPlayer.isPlaying} />)}
+                                {/* Filter queue to exclude items that are already generating (race condition fix) */}
+                                {(() => {
+                                    const generatingIds = new Set(
+                                        library.filter(item => ['generating', 'processing', 'pending'].includes(item.status)).map(item => item.id)
+                                    );
+                                    if (currentGenId) generatingIds.add(currentGenId);
+                                    const filteredQueue = queue.filter(item => !generatingIds.has(item.id));
+                                    return filteredQueue.slice().reverse().map((item, idx) => (
+                                        <LibraryItem key={`queue-${item.id}`} item={item} isQueued queuePosition={filteredQueue.length - idx} onRemoveFromQueue={() => removeFromQueue(item.id).then(loadQueue)} />
+                                    ));
+                                })()}
+                                {currentGenPayload ? (
+                                    <LibraryItem item={currentGenPayload} isGenerating onStop={doStopGeneration} status={status} elapsedTime={elapsedTime} estimatedTime={estimatedTime} />
+                                ) : generating && queue.length > 0 && (
+                                    <LibraryItem item={{ title: 'Starting next song...', status: 'pending' }} isGenerating status="Please wait" elapsedTime={0} estimatedTime={0} />
+                                )}
+                                {library.filter(item => item.id !== currentGenId && !['generating', 'processing', 'pending'].includes(item.status)).map(item => <LibraryItem key={item.id} item={item} onDelete={() => deleteGeneration(item.id).then(loadLibrary)} onPlay={audioPlayer.play} onUpdate={loadLibrary} onStop={() => doStopGeneration(item.id)} isCurrentlyPlaying={audioPlayer.playingId === item.id} isAudioPlaying={audioPlayer.isPlaying} />)}
                             </div>
                         )}
                     </div>

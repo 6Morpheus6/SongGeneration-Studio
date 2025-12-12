@@ -226,8 +226,7 @@ var AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
         const url = URL.createObjectURL(file);
         ws.load(url);
 
-        ws.on('ready', async () => {
-            setIsLoading(false);
+        ws.on('ready', () => {
             const duration = ws.getDuration();
             setTotalDuration(duration);
 
@@ -235,15 +234,12 @@ var AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
             setClipDuration(initialClipDuration);
             setRegionStart(0);
 
-            try {
-                if (!audioContextRef.current) {
-                    audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                const arrayBuffer = await file.arrayBuffer();
-                const decodedBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
+            // Use WaveSurfer's decoded data directly (no need to decode again!)
+            const decodedBuffer = ws.getDecodedData();
+            if (decodedBuffer) {
                 audioBufferRef.current = decodedBuffer;
-                console.log(`Audio decoded: ${decodedBuffer.sampleRate}Hz, ${decodedBuffer.numberOfChannels}ch, ${decodedBuffer.length} samples`);
 
+                // Extract peaks for the expanded view
                 const numBars = 200;
                 const channelData = decodedBuffer.getChannelData(0);
                 const samplesPerBar = Math.floor(channelData.length / numBars);
@@ -260,12 +256,10 @@ var AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
                 const maxPeak = Math.max(...peaks, 0.01);
                 const normalizedPeaks = peaks.map(p => (p / maxPeak) * 100);
                 setWaveformPeaks(normalizedPeaks);
-            } catch (err) {
-                console.error('Failed to decode audio:', err);
-                if (ws.getDecodedData()) {
-                    audioBufferRef.current = ws.getDecodedData();
-                }
             }
+
+            // Only set loading to false after everything is ready
+            setIsLoading(false);
         });
 
         ws.on('error', (err) => {
@@ -1438,6 +1432,7 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
     const [exportingMp4, setExportingMp4] = useState(false);
     const [exportError, setExportError] = useState(null);
     const meta = (isQueued || isGenerating) ? item : (item.metadata || {});
+    const hasReference = !!(meta.reference_audio || meta.reference_audio_id);
 
     // Use a stable cache key based on cover filename (changes when cover is updated)
     const coverCacheKey = meta.cover || '';
@@ -1584,6 +1579,7 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
                     {meta.genre && <span className="tag tag-purple">{meta.genre}</span>}
                     {meta.emotion && <span className="tag tag-warning">{meta.emotion}</span>}
                     {meta.bpm && <span className="tag tag-primary">{meta.bpm} BPM</span>}
+                    {hasReference && <span className="tag" style={{ backgroundColor: 'rgba(139, 92, 246, 0.2)', color: '#8B5CF6' }}>Style Clone</span>}
                 </div>
             </div>
 
@@ -1736,6 +1732,7 @@ var SongsPanelItem = ({ item, audioPlayer, onDelete }) => {
     const isAudioPlaying = audioPlayer.isPlaying;
     const canPlay = item.status === 'completed' && (item.output_file || item.output_files?.length > 0);
     const coverUrl = meta.cover ? `/api/generation/${item.id}/cover?v=${encodeURIComponent(meta.cover)}` : null;
+    const hasReference = !!(meta.reference_audio || meta.reference_audio_id);
 
     const showOverlay = canPlay && coverUrl && (isHovered || (isPlaying && isAudioPlaying));
 
@@ -1772,6 +1769,16 @@ var SongsPanelItem = ({ item, audioPlayer, onDelete }) => {
                     </div>
                 )}
                 {item.status === 'failed' && <CloseIcon color="#fff" />}
+                {/* Reference audio indicator */}
+                {hasReference && (
+                    <div style={{
+                        position: 'absolute', bottom: '-2px', right: '-2px',
+                        width: '14px', height: '14px', borderRadius: '50%',
+                        backgroundColor: '#8B5CF6', border: '2px solid #1e1e1e',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '8px', color: '#fff'
+                    }} title="Style cloned from reference">R</div>
+                )}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="text-sm font-medium text-primary truncate">{meta.title || 'Untitled'}</div>

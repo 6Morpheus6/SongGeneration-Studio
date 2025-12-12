@@ -14,12 +14,20 @@ var SECTION_TYPES = {
     'prechorus': { name: 'Pre-Chorus', color: '#06B6D4', hasLyrics: true, hasDuration: false },
 };
 
-// Model generation time estimates (in seconds)
+// Model generation time defaults (in seconds) - used as starting point before learning
 var MODEL_BASE_TIMES = {
-    'songgeneration_base': 180,
-    'songgeneration_base_new': 200,
-    'songgeneration_base_full': 300,
-    'songgeneration_large': 420,
+    'songgeneration_base': 180,       // 3:00
+    'songgeneration_base_new': 180,   // 3:00
+    'songgeneration_base_full': 240,  // 4:00
+    'songgeneration_large': 360,      // 6:00
+};
+
+// Maximum additional time based on lyrics/sections (in seconds)
+var MODEL_MAX_ADDITIONAL = {
+    'songgeneration_base': 180,       // +3:00 max = 6:00 total
+    'songgeneration_base_new': 180,   // +3:00 max = 6:00 total
+    'songgeneration_base_full': 240,  // +4:00 max = 8:00 total
+    'songgeneration_large': 360,      // +6:00 max = 12:00 total
 };
 
 // Default song sections
