@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="iconwhite.png?v=2" alt="SongGeneration Studio" width="360">
+<img src="logo.png" alt="SongGeneration Studio" width="360">
 
 ### 🎵 Create complete AI-generated songs with vocals, lyrics, and full instrumental tracks
 
