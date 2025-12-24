@@ -120,11 +120,11 @@ That's it! The installer handles everything automatically.
 
 ## Credits
 
-- **LeVo Model** by [Tencent AI Lab](https://github.com/AisingioroHao0/SongGeneration) - The AI engine powering song generation
+- **LeVo Model** by [Tencent AI Lab](https://github.com/tencent-ailab/SongGeneration) - The AI engine powering song generation
 - **Pinokio** - One-click installation and launcher
 
 ---
 
 ## License
 
-This launcher is provided for personal, educational, and research purposes. See the original [SongGeneration repository](https://github.com/AisingioroHao0/SongGeneration) for model licensing details.
+This launcher is provided for personal, educational, and research purposes. See the original [SongGeneration repository](https://github.com/tencent-ailab/SongGeneration) for model licensing details.
