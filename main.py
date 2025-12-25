@@ -451,20 +451,23 @@ async def upload_and_trim_reference(
         f.write(content)
 
     try:
-        # Output as FLAC for best quality preservation
-        trimmed_filename = f"trimmed_{Path(file.filename).stem}.flac"
+        # Output as WAV PCM16 48kHz - consistent format for model input
+        # SongGeneration only uses first 10 seconds, so cap duration
+        actual_duration = min(trim_duration, 10.0)
+        trimmed_filename = f"trimmed_{Path(file.filename).stem}.wav"
         trimmed_path = UPLOADS_DIR / f"{file_id}_{trimmed_filename}"
 
-        # Use ffmpeg to trim with highest quality settings
+        # Use ffmpeg to trim and convert to WAV PCM16 48kHz
         # -ss before -i for fast seeking, -t for duration
-        # -c:a flac for lossless compression
+        # -ar 48000 for 48kHz sample rate, -c:a pcm_s16le for 16-bit PCM
+        # Preserve original channels (no -ac flag)
         cmd = [
             'ffmpeg', '-y',
             '-ss', str(trim_start),
+            '-t', str(actual_duration),
             '-i', str(temp_original),
-            '-t', str(trim_duration),
-            '-c:a', 'flac',
-            '-compression_level', '8',
+            '-ar', '48000',
+            '-c:a', 'pcm_s16le',
             str(trimmed_path)
         ]
 
