@@ -18,7 +18,7 @@
 </div>
 
 ---
-## ✨ Contributors
+## 🤝 Contributors
 Main developer / UI: BazedFrog
 
 Developer: [Morpheus](https://github.com/6Morpheus6)
