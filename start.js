@@ -1,4 +1,7 @@
 module.exports = {
+  requires: {
+    bundle: "ai"
+  },
   daemon: true,
   run: [
     {
@@ -13,7 +16,7 @@ module.exports = {
         path: "app",
         message: "python main.py --host 127.0.0.1 --port {{port}}",
         on: [{
-          event: "/(http:\/\/[0-9.:]+)/",
+          event: "/http:\\/\\/[^\\s\\/]+:\\d{2,5}(?=[^\\w]|$)/",
           done: true
         }]
       }
@@ -21,7 +24,7 @@ module.exports = {
     {
       method: "local.set",
       params: {
-        url: "{{input.event[1]}}"
+        url: "{{input.event[0]}}"
       }
     }
   ]
