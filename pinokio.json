@@ -1,6 +1,6 @@
 {
   "title": "SongGeneration Studio",
-  "description": "AI Song Generation with Full Style Control - Generate complete songs with lyrics, vocals, and instrumental tracks using Tencent AI Lab's SongGeneration (LeVo) model.",
+  "description": "AI Song Generation with Full Style Control - Generate complete songs with lyrics, vocals, and instrumental tracks using Tencent AI Lab's SongGeneration (LeVo) model. [NVIDIA ONLY]",
   "icon": "icon.png",
   "plugin": {
     "menu": []
